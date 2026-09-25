@@ -1,0 +1,87 @@
+# ИИ-прогноз загрузки трамвайных маршрутов.
+# Поднимается одной командой: docker compose up
+#
+# Правило запускаемости (CLAUDE.md): сервис обязан подниматься с первого дня,
+# пусть даже на синтетике. «При отсутствии запускаемого сервиса балл
+# существенно снижается» — это дороже любой недоделанной функции.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: tram-postgres
+    environment:
+      POSTGRES_DB: tram
+      POSTGRES_USER: tram
+      POSTGRES_PASSWORD: tram
+      # Ускоряет первичную загрузку labels; данные не критичны к потере.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tram -d tram"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    # Нефункциональное требование ТЗ: один контейнер 2-4 vCPU / 2-4 ГБ RAM.
+    # Ограничения заданы явно, чтобы замеры в /perf были воспроизводимы.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: tram-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # R2DBC для выдачи (реактивный стек), JDBC отдельно для Flyway-миграций.
+      SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/tram
+      SPRING_R2DBC_USERNAME: tram
+      SPRING_R2DBC_PASSWORD: tram
+      SPRING_FLYWAY_URL: jdbc:postgresql://postgres:5432/tram
+      SPRING_FLYWAY_USER: tram
+      SPRING_FLYWAY_PASSWORD: tram
+      # Внешние источники: сеть НЕ в критическом пути. Сервис поднимается
+      # на снимке из БД, живое обновление идёт фоном и может не сработать.
+      APP_EXTERNAL_ENABLED: "true"
+      APP_EXTERNAL_TIMEOUT_MS: "2000"
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75 -XX:+UseZGC"
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: tram-frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3000:80"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
+volumes:
+  pgdata:
