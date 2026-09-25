@@ -9,6 +9,7 @@
     python external_data/parse_deptrans_tg.py extract    # jsonl -> events_2025.csv, traffic_scores_2025.csv
     python external_data/parse_deptrans_tg.py measure    # замер эффекта на labels -> effects_tg_report.csv
     python external_data/parse_deptrans_tg.py all        # всё подряд
+    python external_data/parse_deptrans_tg.py incidents --channel DtOperativno   # оперативные сбои трамваев -> tram_incidents_2025.csv
 Параметры: --channel DtRoad --start 2025-01-01 --end 2025-12-31 --sleep 0.7
 """
 import argparse
@@ -198,6 +199,37 @@ def extract(start, end):
           f"traffic_scores={len(tr)} days_with_score={tr.date.nunique() if len(tr) else 0}")
 
 
+# ---------------------------------------------------------------- incidents
+INCIDENT_RX = r"(задержива\w*|не ходят|временно изменен\w*|остановлено движени\w*|приостановлено движени\w*)"
+CAUSES = {"dtp": r"дтп", "tech": r"технических причин|неисправн", "catenary": r"контактн\w* сет",
+          "foreign_vehicle": r"сторонн\w* транспорт|автомобил\w* на путях|на путях\w*", "weather": r"погод|снег|дерев|ветр"}
+
+
+def incidents(start, end):
+    """Оперативные сбои трамваев @DtOperativno: «задерживаются трамваи № 7 и 50», «маршруты временно изменены».
+    -> tram_incidents_2025.csv (post_id, date, hour, route, cause, url). Одна строка на целевой маршрут."""
+    posts = pd.read_json(RAW, lines=True).drop_duplicates("id")
+    posts["dt"] = pd.to_datetime(posts.datetime_utc, utc=True).dt.tz_convert("Europe/Moscow")
+    posts = posts[(posts.dt >= pd.Timestamp(start, tz="Europe/Moscow")) &
+                  (posts.dt < pd.Timestamp(end, tz="Europe/Moscow") + pd.Timedelta(days=1))].sort_values("dt")
+    rows = []
+    for _, r in posts.iterrows():
+        low = r.text.lower()
+        if "трамва" not in low or not re.search(INCIDENT_RX, low) or low.startswith(("✅", "⚠️ с ", "⚠️ в период")):
+            continue
+        if re.search(r"(с \d{1,2} (?:по|до) \d{1,2}|будут закрыты|на время работ|по выходным)", low):
+            continue                                  # плановые работы — это события, а не сбой
+        cause = next((c for c, rx in CAUSES.items() if re.search(rx, low)), "other")
+        for route in tram_routes(r.text):
+            rows.append({"post_id": r.id, "date": r["dt"].strftime("%Y-%m-%d"), "hour": r["dt"].hour, "route": route,
+                         "cause": cause, "url": r.url})
+    inc = pd.DataFrame(rows, columns=["post_id", "date", "hour", "route", "cause", "url"])
+    inc = inc.drop_duplicates(["date", "route", "hour"])
+    inc.to_csv(HERE / "tram_incidents_2025.csv", sep=";", index=False, encoding="utf-8")
+    print(f"incidents={len(inc)} route-days={inc[['date', 'route']].drop_duplicates().shape[0]}")
+    print(inc.groupby("route").size().to_string())
+
+
 # ---------------------------------------------------------------- measure
 def measure():
     import sys
@@ -351,7 +383,7 @@ def measure():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["crawl", "extract", "measure", "all"])
+    ap.add_argument("cmd", choices=["crawl", "extract", "measure", "all", "incidents"])
     ap.add_argument("--channel", default="DtRoad")
     ap.add_argument("--start", default="2025-01-01")
     ap.add_argument("--end", default="2025-12-31")
@@ -364,3 +396,5 @@ if __name__ == "__main__":
         extract(a.start, a.end)
     if a.cmd in ("measure", "all"):
         measure()
+    if a.cmd == "incidents":
+        incidents(a.start, a.end)

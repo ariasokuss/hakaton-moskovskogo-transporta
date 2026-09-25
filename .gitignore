@@ -1,0 +1,6 @@
+# датасет хакатона (2.7 ГБ) — берётся с Kaggle: shotme/moscow-transport
+mostrans_handoff/mostrans/dataset/
+dataset.zip
+
+# кэш Python
+__pycache__/
