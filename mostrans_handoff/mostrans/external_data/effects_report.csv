@@ -1,0 +1,15 @@
+factor;n_days;mean_ratio_to_same_dow;median_ratio;note
+holiday (производственный календарь);12;0.452;0.461;праздник в будний день / обычный будний
+holiday on weekend;4;0.936;0.961;праздник в выходной / обычный выходной
+short_workday;3;1.021;1.024;предпраздничный будний
+school_holiday weekday (без лета и НГ);10;0.994;0.997;каникулы в будни
+normal weekday;127;1.01;1.011;контроль ~1.0
+ABLATION daily WAPE-score: base -> base*calendar(LOO);304;0.9047;0.9259;до / после календарной поправки
+weather[fact] осадки >5 мм/сут (будни);10;0.993;0.998;vs будни без события
+weather[fact] снег >2 см/сут (будни);5;1.012;1.013;vs будни без события
+weather[fact] t<-10°C (будни);3;0.973;0.976;vs будни без события
+weather[fact] OLS log-ratio ~ temp+precip+snow (std coef);127;"temp=+0.0128; precip=-0.0097; snow=+0.0056";;эффект на 1 std признака, в долях объёма
+weather[fcst] осадки >5 мм/сут (будни);6;1.003;0.998;vs будни без события
+weather[fcst] снег >2 см/сут (будни);2;0.99;0.99;vs будни без события
+weather[fcst] t<-10°C (будни);1;0.976;0.976;vs будни без события
+weather[fcst] OLS log-ratio ~ temp+precip+snow (std coef);127;"temp=+0.0122; precip=-0.0071; snow=+0.0040";;эффект на 1 std признака, в долях объёма

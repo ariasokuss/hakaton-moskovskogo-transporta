@@ -1,0 +1,21 @@
+factor;n;ratio_vs_base;control
+traffic: дней с баллом ЦОДД (все / вечерних);110;5.0;
+traffic[day max] corr(score, ratio) будни;58;-0.028;
+traffic[day max] score 0-5 (будни): ratio;22;1.014;
+traffic[day max] score 6-7 (будни): ratio;34;1.011;
+traffic[day max] score 8-10 (будни): ratio;2;1.006;
+ABLATION traffic[day max] WAPE-score на днях с баллом: base -> base*K_traffic(LOO);58;0.9699;0.9709
+traffic[hourly +3h] corr(score, ratio) рабочие дни;175;0.079;
+traffic[hourly +3h, вечер >=15ч] corr(score, ratio);96;0.16;
+traffic[hourly +3h] score 0-4: median ratio;75;0.982;
+traffic[hourly +3h] score 5-5: median ratio;32;0.992;
+traffic[hourly +3h] score 6-7: median ratio;66;0.998;
+traffic[hourly +3h] score 8-10: median ratio;2;0.979;
+events[closure] дни события (будни);35;1.02;1.007
+events[mass_event] дни события (будни);64;1.015;1.006
+events[tram_works] дни события (будни);20;1.015;1.01
+events с упоминанием целевого маршрута: ratio маршрута;20;0.929;1.0
+events[tram_works|closure] с маршрутом: median ratio маршрута;11;1.024;1.0
+ABLATION WAPE-score на затронутых (маршрут,день): base -> base*K_event(LOO);11;0.8901;0.8848
+ABLATION WAPE-score все (маршрут,день): base -> base*K_event(LOO);2736;0.9047;0.9046
+ABLATION daily WAPE-score base -> base*events(LOO);304;0.9047;0.9048
