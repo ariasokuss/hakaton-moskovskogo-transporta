@@ -34,7 +34,7 @@ public class ApiErrorHandler {
     @ExceptionHandler(ResponseStatusException.class)
     public ProblemDetail status(ResponseStatusException e) {
         HttpStatus st = HttpStatus.resolve(e.getStatusCode().value());
-        if (st == HttpStatus.NOT_FOUND) return problem(st, "Не найдено", "Такого адреса в API нет. Список методов — в README.");
+        if (st == HttpStatus.NOT_FOUND) return problem(st, "Не найдено", "Такого адреса в API нет. Список методов — на корне сервиса: GET /");
         return problem(st == null ? HttpStatus.BAD_REQUEST : st, "Некорректный запрос", "Запрос не может быть обработан: проверьте адрес и параметры.");
     }
 
