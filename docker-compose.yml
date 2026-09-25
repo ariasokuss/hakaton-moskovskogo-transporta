@@ -59,6 +59,8 @@ services:
       - "${DATASET_DIR:-./ИИ-прогноз пассажиропотока/dataset}:/data/dataset:ro"
       # Артефакт прогноза ML-команды (route;date;hour;prediction).
       - ./data/forecast:/data/forecast:ro
+      # Геометрия маршрутов, снимок OpenStreetMap.
+      - ./data/geo:/data/geo:ro
     ports:
       - "8080:8080"
     healthcheck:

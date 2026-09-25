@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
+import ru.mttech.tram.features.GeometryService;
 import ru.mttech.tram.forecast.ForecastQueryService;
 import ru.mttech.tram.forecast.ForecastQueryService.Attention;
 import ru.mttech.tram.forecast.ForecastQueryService.Granularity;
@@ -39,6 +40,7 @@ public class ForecastController {
     private final ForecastQueryService query;
     private final ForecastRunService runs;
     private final ObjectMapper json;
+    private final GeometryService geometry;
 
     /**
      * Готовые байты главного экрана: [0] — JSON, [1] — он же в gzip.
@@ -53,7 +55,9 @@ public class ForecastController {
                 }
             });
 
-    public ForecastController(ForecastQueryService query, ForecastRunService runs, ObjectMapper json) {
+    public ForecastController(ForecastQueryService query, ForecastRunService runs, ObjectMapper json,
+                              GeometryService geometry) {
+        this.geometry = geometry;
         this.query = query;
         this.runs = runs;
         this.json = json;
@@ -68,6 +72,12 @@ public class ForecastController {
     @GetMapping("/routes")
     public List<Route> routes() {
         return query.routes();
+    }
+
+    /** Трассы и остановки всех маршрутов одним GeoJSON — карта рисуется целиком за один запрос. */
+    @GetMapping("/geometry")
+    public Map<String, Object> geometry() {
+        return geometry.geoJson();
     }
 
     /** Главный экран диспетчера одним запросом. */
