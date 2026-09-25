@@ -29,15 +29,29 @@ PERIODS = {"train.csv": ("2025-01-01", "2025-08-31"), "test.csv": ("2025-09-01",
 ROUTES = [1, 5, 7, 11, 12, 17, 25, 26, 28, 50]
 
 
+RAW_COLUMNS = ["tran_no", "device_no", "tran_date_time", "begin_date_time", "input_date_time", "crd_hashcode",
+               "validation_result", "tran_type_id", "place_id", "good_type", "pass_route", "ngpt_route",
+               "bus_exit_no", "garage_number"]
+REJECTS = {}   # файл -> число строк, которые не удалось разобрать (для отчёта)
+
+
 def ingest_duckdb(src: Path) -> pd.DataFrame:
     import duckdb
+    con = duckdb.connect()
+    cols = "{" + ", ".join(f"'{c}': 'VARCHAR'" for c in RAW_COLUMNS) + "}"
     parts = []
     for name, (a, b) in PERIODS.items():
+        stem = name.split(".")[0]
+        # формат задан явно: автоопределение DuckDB на 8 ГБ спотыкается о нестандартные строки.
+        # Битые строки не роняют загрузку, а считаются в rejects и попадают в отчёт.
+        opts = (f"delim=';', header=true, auto_detect=false, columns={cols}, quote='', escape='', "
+                f"strict_mode=false, null_padding=true, ignore_errors=true, max_line_size=10000000, "
+                f"store_rejects=true, rejects_table='rej_{stem}', rejects_scan='scan_{stem}'")
         sql = f"""
         WITH raw AS (
             SELECT DISTINCT tran_no, device_no, TRY_CAST(tran_date_time AS TIMESTAMP) AS ts,
                    validation_result, ngpt_route, bus_exit_no, garage_number
-            FROM read_csv('{(src / name).as_posix()}', delim=';', header=true, all_varchar=true)
+            FROM read_csv('{(src / name).as_posix()}', {opts})
             WHERE ngpt_route LIKE '%трамвай%' AND TRY_CAST(tran_date_time AS TIMESTAMP) IS NOT NULL
         )
         SELECT CAST(regexp_extract(ngpt_route, '^(\\d+)', 1) AS INTEGER) AS route,
@@ -52,8 +66,12 @@ def ingest_duckdb(src: Path) -> pd.DataFrame:
         GROUP BY 1, 2, 3
         """
         t0 = time.time()
-        parts.append(duckdb.sql(sql).df())
-        print(f"{name}: {len(parts[-1]):,} строк витрины за {time.time() - t0:.0f} с", flush=True)
+        parts.append(con.sql(sql).df())
+        try:
+            REJECTS[name] = int(con.sql(f"SELECT count(*) FROM rej_{stem}").fetchone()[0])
+        except Exception:
+            REJECTS[name] = None
+        print(f"{name}: {len(parts[-1]):,} строк витрины за {time.time() - t0:.0f} с, не разобрано строк: {REJECTS[name]}", flush=True)
     return pd.concat(parts, ignore_index=True)
 
 
@@ -114,7 +132,7 @@ def run(src, out, labels=None):
     hourly = ingest_zip(src) if src.suffix == ".zip" else ingest_duckdb(src)
     hourly = hourly[hourly.route.isin(ROUTES)].sort_values(["route", "date", "hour"], ignore_index=True)
     hourly.to_parquet(out / "hourly.parquet", index=False)
-    rep = {"source": str(src), "seconds": round(time.time() - t0, 1), "rows": int(len(hourly))}
+    rep = {"source": str(src), "seconds": round(time.time() - t0, 1), "rows": int(len(hourly)), "rejected_lines": dict(REJECTS)}
     if labels is None:
         if src.suffix == ".zip":
             with zipfile.ZipFile(src) as z:
