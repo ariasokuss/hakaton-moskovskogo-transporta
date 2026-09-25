@@ -75,22 +75,21 @@ services:
           cpus: "2.0"
           memory: 2G
 
-# Фронтенд подключается, когда появится ./frontend/Dockerfile.
-#  frontend:
-#    build:
-#      context: ./frontend
-#      dockerfile: Dockerfile
-#    container_name: tram-frontend
-#    depends_on:
-#      backend:
-#        condition: service_healthy
-#    ports:
-#      - "3000:80"
-#    deploy:
-#      resources:
-#        limits:
-#          cpus: "0.5"
-#          memory: 256M
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: tram-frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3000:80"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
 
 volumes:
   pgdata:
