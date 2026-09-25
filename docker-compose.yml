@@ -53,6 +53,12 @@ services:
       APP_EXTERNAL_ENABLED: "true"
       APP_EXTERNAL_TIMEOUT_MS: "2000"
       JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75 -XX:+UseZGC"
+    volumes:
+      # Датасет организаторов в git не лежит — монтируется read-only.
+      # Путь переопределяется переменной DATASET_DIR.
+      - "${DATASET_DIR:-./ИИ-прогноз пассажиропотока/dataset}:/data/dataset:ro"
+      # Артефакт прогноза ML-команды (route;date;hour;prediction).
+      - ./data/forecast:/data/forecast:ro
     ports:
       - "8080:8080"
     healthcheck:
@@ -67,21 +73,22 @@ services:
           cpus: "2.0"
           memory: 2G
 
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: tram-frontend
-    depends_on:
-      backend:
-        condition: service_healthy
-    ports:
-      - "3000:80"
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 256M
+# Фронтенд подключается, когда появится ./frontend/Dockerfile.
+#  frontend:
+#    build:
+#      context: ./frontend
+#      dockerfile: Dockerfile
+#    container_name: tram-frontend
+#    depends_on:
+#      backend:
+#        condition: service_healthy
+#    ports:
+#      - "3000:80"
+#    deploy:
+#      resources:
+#        limits:
+#          cpus: "0.5"
+#          memory: 256M
 
 volumes:
   pgdata:

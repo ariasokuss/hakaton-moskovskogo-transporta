@@ -1,0 +1,7 @@
+=== /api/dashboard (кэш готовых байтов) ===
+  Average:	0.0905 secs
+  Requests/sec:	550.7349
+  95% in 0.1789 secs
+  99% in 0.2196 secs
+  [200]	11053 responses
+CPU 0.33% MEM 767.5MiB / 2GiB
