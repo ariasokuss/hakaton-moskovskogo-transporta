@@ -67,11 +67,12 @@ public class GridStore {
         List<Regime> regimes = loadRegimes();
         NavigableMap<LocalDate, int[][]> actuals = loadActuals(idx, routes.size());
         double[][][] baseline = computeBaseline(routes, actuals, regimes);
+        double[][][] loadRatio = computeLoadRatio(idx, routes.size(), regimes, routes);
 
         ForecastSeries shortTerm = loadSeries(latestRunId("day"), idx, routes.size());
         ForecastSeries year = loadSeries(latestRunId("year"), idx, routes.size());
 
-        current.set(new Snapshot(List.copyOf(routes), Map.copyOf(idx), actuals, baseline,
+        current.set(new Snapshot(List.copyOf(routes), Map.copyOf(idx), actuals, baseline, loadRatio,
                 List.copyOf(regimes), shortTerm, year));
         log.info("Снимок загружен за {} мс: маршрутов {}, дней факта {}, прогон day={}, year={}",
                 System.currentTimeMillis() - t0, routes.size(), actuals.size(),
@@ -146,6 +147,30 @@ public class GridStore {
             }
         }
         return b;
+    }
+
+    /**
+     * Отношение нагрузки (успешные + пересадки) к посадкам по маршруту, дню недели
+     * и часу. На прогнозный период нагрузка на вагон = прогноз посадок × отношение.
+     * Нет данных о нагрузке — отношение 1, то есть нагрузка = посадки.
+     */
+    private double[][][] computeLoadRatio(Map<Integer, Integer> idx, int n, List<Regime> regimes, List<Route> routes) {
+        double[][][] load = new double[n][7][24], board = new double[n][7][24];
+        db.sql("SELECT route_id, fact_date, hour, boardings, load FROM core.actual_hourly WHERE load IS NOT NULL")
+                .map((r, m) -> new Object[]{num(r.get("route_id")), r.get("fact_date", LocalDate.class),
+                        num(r.get("hour")), num(r.get("boardings")), num(r.get("load"))})
+                .all().toIterable().forEach(row -> {
+                    Integer i = idx.get((Integer) row[0]);
+                    LocalDate d = (LocalDate) row[1];
+                    if (i == null || isExcluded((Integer) row[0], d, regimes)) return;
+                    int dow = d.getDayOfWeek().getValue() - 1, h = (Integer) row[2];
+                    board[i][dow][h] += (Integer) row[3];
+                    load[i][dow][h] += (Integer) row[4];
+                });
+        double[][][] ratio = new double[n][7][24];
+        for (int i = 0; i < n; i++) for (int d = 0; d < 7; d++) for (int h = 0; h < 24; h++)
+            ratio[i][d][h] = board[i][d][h] >= 50 ? load[i][d][h] / board[i][d][h] : 1.0;
+        return ratio;
     }
 
     private static boolean isExcluded(int routeId, LocalDate d, List<Regime> regimes) {

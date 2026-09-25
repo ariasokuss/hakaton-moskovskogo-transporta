@@ -44,10 +44,11 @@ public class ForecastQueryService {
         public double total() { return kWeather * kEvent * kSeason * kTraffic * kManual; }
     }
 
-    public record Point(String t, double forecast, double baseline, Double actual, Double deviationPct) {}
+    /** load — нагрузка на вагон с учётом пересадок (прогноз посадок × отношение load/boardings из истории). */
+    public record Point(String t, double forecast, double load, double baseline, Double actual, Double deviationPct) {}
 
     public record RouteSeries(int routeId, String shortName, String color, List<Point> points,
-                              double forecastTotal, double baselineTotal, Double deviationPct) {}
+                              double forecastTotal, double loadTotal, double baselineTotal, Double deviationPct) {}
 
     public record Attention(int routeId, String shortName, String color, String direction,
                             double forecast, double baseline, double delta, double deviationPct,
@@ -176,7 +177,7 @@ public class ForecastQueryService {
 
     private RouteSeries routeSeries(Snapshot s, Route r, LocalDate from, LocalDate to, Granularity g, Scenario sc) {
         int ri = s.routeIdx().get(r.id());
-        Map<String, double[]> buckets = new LinkedHashMap<>();   // t -> [forecast, baseline, actual, actualSeen]
+        Map<String, double[]> buckets = new LinkedHashMap<>();   // t -> [forecast, baseline, actual, actualSeen, load]
         for (LocalDate d = from; !d.isAfter(to); d = d.plusDays(1)) {
             ForecastSeries fs = s.seriesFor(d);
             int dow = d.getDayOfWeek().getValue() - 1;
@@ -187,22 +188,25 @@ public class ForecastQueryService {
                     case day -> d.toString();
                     case month -> YearMonth.from(d).toString();
                 };
-                double[] acc = buckets.computeIfAbsent(key, k -> new double[4]);
-                acc[0] += fs == null ? 0 : fs.at(ri, d, h) * sc.total();
+                double[] acc = buckets.computeIfAbsent(key, k -> new double[5]);
+                double f = fs == null ? 0 : fs.at(ri, d, h) * sc.total();
+                acc[0] += f;
+                acc[4] += f * s.loadRatio()[ri][dow][h];
                 acc[1] += s.baseline()[ri][dow][h];
                 if (act != null) { acc[2] += act[ri][h]; acc[3] = 1; }
             }
         }
         List<Point> pts = new ArrayList<>(buckets.size());
-        double ft = 0, bt = 0;
+        double ft = 0, bt = 0, lt = 0;
         for (var e : buckets.entrySet()) {
             double[] a = e.getValue();
             ft += a[0];
             bt += a[1];
-            pts.add(new Point(e.getKey(), round(a[0]), round(a[1]), a[3] > 0 ? a[2] : null,
+            lt += a[4];
+            pts.add(new Point(e.getKey(), round(a[0]), round(a[4]), round(a[1]), a[3] > 0 ? a[2] : null,
                     a[1] > 0 ? round((a[0] - a[1]) / a[1] * 100) : null));
         }
-        return new RouteSeries(r.id(), r.shortName(), r.color(), pts, round(ft), round(bt),
+        return new RouteSeries(r.id(), r.shortName(), r.color(), pts, round(ft), round(lt), round(bt),
                 bt > 0 ? round((ft - bt) / bt * 100) : null);
     }
 

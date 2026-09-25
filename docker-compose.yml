@@ -61,6 +61,8 @@ services:
       - ./data/forecast:/data/forecast:ro
       # Геометрия маршрутов, снимок OpenStreetMap.
       - ./data/geo:/data/geo:ro
+      # Нагрузка с пересадками, агрегат сырых валидаций (tools/build_load.sh).
+      - ./data/load:/data/load:ro
     ports:
       - "8080:8080"
     healthcheck:

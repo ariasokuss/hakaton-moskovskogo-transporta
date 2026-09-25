@@ -43,13 +43,14 @@ public final class Model {
     public record Snapshot(List<Route> routes, Map<Integer, Integer> routeIdx,
                            NavigableMap<LocalDate, int[][]> actuals,
                            double[][][] baseline,            // [routeIdx][dow 0..6][hour]
+                           double[][][] loadRatio,           // load / boardings, [routeIdx][dow][hour]
                            List<Regime> regimes,
                            ForecastSeries shortTerm,         // день/месяц: ноябрь–декабрь
                            ForecastSeries year) {            // год: качественно, может быть null
 
         public static Snapshot empty() {
             return new Snapshot(List.of(), Map.of(), new java.util.TreeMap<>(), new double[0][7][24],
-                    List.of(), null, null);
+                    new double[0][7][24], List.of(), null, null);
         }
 
         public ForecastSeries seriesFor(LocalDate d) {

@@ -64,11 +64,12 @@ public class ExportController {
     }
 
     private static byte[] csv(List<RouteSeries> data) {
-        StringBuilder sb = new StringBuilder("﻿маршрут;период;прогноз;обычный_уровень;факт;отклонение_%\n");
+        StringBuilder sb = new StringBuilder("﻿маршрут;период;прогноз;нагрузка_с_пересадками;обычный_уровень;факт;отклонение_%\n");
         for (RouteSeries rs : data) {
             for (Point p : rs.points()) {
                 sb.append(rs.shortName()).append(';').append(p.t()).append(';')
-                        .append(Math.round(p.forecast())).append(';').append(Math.round(p.baseline())).append(';')
+                        .append(Math.round(p.forecast())).append(';').append(Math.round(p.load())).append(';')
+                        .append(Math.round(p.baseline())).append(';')
                         .append(p.actual() == null ? "" : Math.round(p.actual())).append(';')
                         .append(p.deviationPct() == null ? "" : p.deviationPct()).append('\n');
             }
@@ -92,7 +93,7 @@ public class ExportController {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         Workbook wb = new Workbook(out, "tram-forecast", "1.0");
         Worksheet ws = wb.newWorksheet("Прогноз");
-        String[] head = {"Маршрут", "Период", "Прогноз", "Обычный уровень", "Факт", "Отклонение, %"};
+        String[] head = {"Маршрут", "Период", "Прогноз", "Нагрузка с пересадками", "Обычный уровень", "Факт", "Отклонение, %"};
         for (int c = 0; c < head.length; c++) ws.value(0, c, head[c]);
         ws.range(0, 0, 0, head.length - 1).style().bold().fillColor("DDDDDD").set();
         int row = 1;
@@ -101,9 +102,10 @@ public class ExportController {
                 ws.value(row, 0, rs.shortName());
                 ws.value(row, 1, p.t());
                 ws.value(row, 2, Math.round(p.forecast()));
-                ws.value(row, 3, Math.round(p.baseline()));
-                if (p.actual() != null) ws.value(row, 4, Math.round(p.actual()));
-                if (p.deviationPct() != null) ws.value(row, 5, p.deviationPct());
+                ws.value(row, 3, Math.round(p.load()));
+                ws.value(row, 4, Math.round(p.baseline()));
+                if (p.actual() != null) ws.value(row, 5, Math.round(p.actual()));
+                if (p.deviationPct() != null) ws.value(row, 6, p.deviationPct());
                 row++;
             }
         }

@@ -48,6 +48,7 @@ public class DataIngestService {
                 .map((r, m) -> ((Number) r.get("route_id")).intValue()).all().collectList().block());
 
         ingestLabels(routes);
+        ingestLoad(routes);
         importForecast(routes);
         grid.reload();
         runs.ensureYearRun();
@@ -82,6 +83,33 @@ public class DataIngestService {
         insertBatched("INSERT INTO core.actual_hourly (route_id, fact_date, hour, boardings) VALUES ",
                 " ON CONFLICT DO NOTHING", rows);
         log.info("Загружено строк факта: {}, отброшено (маршрут вне справочника): {}", rows.size(), skipped);
+    }
+
+    /**
+     * Нагрузка на вагон: валидации по кодам {1, 90} — успешные плюс пересадки.
+     * Считается из сырых 10 ГБ скриптом tools/build_load.sh, сюда приходит агрегат.
+     */
+    void ingestLoad(Set<Integer> routes) {
+        Long missing = db.sql("SELECT count(*) AS c FROM core.actual_hourly WHERE load IS NULL")
+                .map((r, m) -> ((Number) r.get("c")).longValue()).one().block();
+        Path p = Path.of(props.loadFile());
+        if (missing == null || missing == 0 || !Files.exists(p)) {
+            if (!Files.exists(p)) log.warn("Нет файла нагрузки {}: load не рассчитан", p);
+            return;
+        }
+        List<String> rows = new ArrayList<>();
+        for (String[] c : readCsv(p)) {
+            int route = Integer.parseInt(c[0]);
+            if (!routes.contains(route)) continue;
+            LocalDate date = LocalDate.parse(c[1]);
+            rows.add("(" + route + ",DATE '" + date + "'," + Integer.parseInt(c[2]) + "," + Integer.parseInt(c[4]) + ")");
+        }
+        for (int i = 0; i < rows.size(); i += BATCH) {
+            db.sql("UPDATE core.actual_hourly a SET load = v.l FROM (VALUES "
+                    + String.join(",", rows.subList(i, Math.min(rows.size(), i + BATCH)))
+                    + ") AS v(r, d, h, l) WHERE a.route_id = v.r AND a.fact_date = v.d AND a.hour = v.h").then().block();
+        }
+        log.info("Нагрузка с пересадками загружена: {} строк", rows.size());
     }
 
     /**

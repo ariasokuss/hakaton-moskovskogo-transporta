@@ -36,6 +36,8 @@ app:
   forecast-file: /data/forecast/submission_latest.csv
   # Трассы и остановки 9 маршрутов, снимок OpenStreetMap (ODbL).
   geometry-file: /data/geo/routes_osm.json
+  # Агрегат сырых валидаций: route;date;hour;boardings;load (tools/build_load.sh).
+  load-file: /data/load/load_hourly.csv
   forecast-model-version: ml-blend-profile-lgbm-cv0.883
   # Коды validation_result, учитываемые в load (нагрузка на вагон).
   load-codes: [1, 90]

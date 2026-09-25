@@ -74,6 +74,7 @@ export default function App() {
     return dash.series[0].points.map((p, i) => ({
       t: p.t, deviationPct: null, actual: null,
       forecast: dash.series.reduce((a, s) => a + s.points[i].forecast, 0),
+      load: dash.series.reduce((a, s) => a + s.points[i].load, 0),
       baseline: dash.series.reduce((a, s) => a + s.points[i].baseline, 0),
     }))
   }, [dash])
@@ -162,6 +163,10 @@ export default function App() {
           </p>
           {dash && <HourChart points={selSeries?.points ?? networkPoints} color={selected?.color ?? '#3f7cac'} />}
           {selSeries && <p className="totals">За сутки: <b>{fmt(selSeries.forecastTotal)}</b> · обычно {fmt(selSeries.baselineTotal)} <Deviation pct={selSeries.deviationPct} /></p>}
+          {selSeries && selSeries.loadTotal > selSeries.forecastTotal && (
+            <p className="small">Нагрузка на вагоны с пересадками: <b>{fmt(selSeries.loadTotal)}</b>
+              <span className="muted"> (+{fmt(selSeries.loadTotal - selSeries.forecastTotal)} пересаживающихся без оплаты)</span></p>
+          )}
           {selected && <p className="muted small">Работает с {selected.serviceHourStart}:00 до {selected.serviceHourEnd}:59</p>}
           {regimes.length > 0 && (
             <div className="regimes">

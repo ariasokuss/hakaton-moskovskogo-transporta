@@ -4,10 +4,10 @@ export type Route = {
   id: number; shortName: string; longName: string | null; color: string; order: number
   serviceHourStart: number; serviceHourEnd: number; hasGeometry: boolean
 }
-export type Point = { t: string; forecast: number; baseline: number; actual: number | null; deviationPct: number | null }
+export type Point = { t: string; forecast: number; load: number; baseline: number; actual: number | null; deviationPct: number | null }
 export type RouteSeries = {
   routeId: number; shortName: string; color: string; points: Point[]
-  forecastTotal: number; baselineTotal: number; deviationPct: number | null
+  forecastTotal: number; loadTotal: number; baselineTotal: number; deviationPct: number | null
 }
 export type Attention = {
   routeId: number; shortName: string; color: string; direction: 'above' | 'below'

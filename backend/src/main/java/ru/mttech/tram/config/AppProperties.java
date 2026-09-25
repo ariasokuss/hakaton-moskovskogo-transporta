@@ -13,5 +13,6 @@ public record AppProperties(
         String forecastFile,
         String forecastModelVersion,
         String geometryFile,
+        String loadFile,
         List<Integer> loadCodes) {
 }
