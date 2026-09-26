@@ -1,0 +1,7 @@
+=== /api/dashboard (после мемоизации) ===
+  Average:	0.2155 secs
+  Requests/sec:	231.0276
+  95% in 0.3123 secs
+  99% in 0.5855 secs
+  [200]	4665 responses
+CPU 0.81% MEM 1023MiB / 2GiB

@@ -777,6 +777,12 @@ def origin_frame(data, t, end, piv):
     f["in_regime"] = 0
     for rg in pm.regimes:
         f.loc[f.route.isin(rg["routes"]) & f.date.between(rg["start"], rg["end"]) & (f.ptype >= 2), "in_regime"] = 1
+        # Лаги за выходные внутри режима (ремонт: 50 не ходит) не описывают выходные ПОСЛЕ его окончания —
+        # иначе модель переносит нули ремонта на восстановленные выходные. Такие лаги — нейтральные (= профилю),
+        # профиль уже знает об окончании режима. В обучении не встречается: режимы не кончались внутри горизонта.
+        after_end = (f.route.isin(rg["routes"]) & (f.ptype >= 2) & (f.date.dt.dayofweek >= 5) & (f.date > rg["end"])).values
+        lags_in = (last_same >= rg["start"]) & (last_same - pd.Timedelta(days=21) <= rg["end"])
+        f.loc[after_end & np.asarray(lags_in), ["lag_w1", "lag_m4"]] = 1.0
     return f, pm
 
 ORIGINS = pd.date_range("2025-02-01", "2025-10-30", freq=f"{ORIGIN_STEP_DAYS}D")
@@ -1092,6 +1098,14 @@ coef = {
     "expert": {"K_PRE_NEW_YEAR": K_PRE_NEW_YEAR, "K_SEASON": K_SEASON},
     "ui_sliders": {"weather": [0.8, 1.2], "event": [0.0, 1.5], "season": [0.8, 1.2], "traffic": [0.9, 1.1], "fleet": [0.5, 1.5]},
 }
+def json_safe(o):
+    # NaN/inf — невалидный JSON (бэкенд на Jackson его не прочитает) → null
+    if isinstance(o, dict): return {str(k): json_safe(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)): return [json_safe(v) for v in o]
+    if isinstance(o, (float, np.floating)): return float(o) if np.isfinite(o) else None
+    if isinstance(o, np.integer): return int(o)
+    return o
+coef = json_safe(coef)
 json.dump(coef, open(ART / "coefficients.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1, default=str)
 # артефакты ML-модели: бустеры LightGBM + контракт признаков (инференс вне ноутбука)
 for old in ART.glob("lgbm_*.txt"):                  # веса прошлых прогонов не смешиваем с текущими
@@ -1107,10 +1121,20 @@ json.dump({"model_version": stamp, "models": ml_names, "seeds": list(ML_SEEDS),
            "versions": {"lightgbm": lgb.__version__, "pandas": pd.__version__, "numpy": np.__version__, "python": sys.version.split()[0]}},
           open(ART / "ml_contract.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1, default=str)
 print("артефакты для сервиса:", sorted(p.name for p in ART.iterdir()))
+
+# архив для веб-сервиса «Пантограф»: распаковать в data/forecast/ репозитория (или tools/sync_ml_artifacts.sh)
+import zipfile as _zf
+BUNDLE = OUT_DIR / "service_artifacts.zip"
+with _zf.ZipFile(BUNDLE, "w", _zf.ZIP_DEFLATED) as z:
+    for nm in ["forecast_hourly.csv", "forecast_year_monthly.csv", "coefficients.json", "ml_contract.json"]:
+        z.write(ART / nm, nm)
+    z.write(OUT_DIR / "submission_latest.csv", "submission_latest.csv")
+print("архив для сервиса:", BUNDLE)
 print(sub.head())
 if IN_COLAB:
     try:
-        from google.colab import files; files.download(str(fname))
+        from google.colab import files
+        files.download(str(fname)); files.download(str(BUNDLE))
     except Exception as e:
         print("download:", e)
 """)

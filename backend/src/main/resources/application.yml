@@ -1,0 +1,51 @@
+spring:
+  application:
+    name: tram-forecast
+  r2dbc:
+    url: r2dbc:postgresql://localhost:5432/tram
+    username: tram
+    password: tram
+    pool:
+      initial-size: 4
+      max-size: 16
+  flyway:
+    url: jdbc:postgresql://localhost:5432/tram
+    user: tram
+    password: tram
+    schemas: core,external
+  webflux:
+    problemdetails:
+      enabled: false   # ошибки оформляет ApiErrorHandler (RFC 9457, по-русски)
+
+server:
+  port: 8080
+  compression:
+    enabled: true
+    mime-types: application/json,text/csv
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+app:
+  # Каталог с датасетом организаторов (labels/). Монтируется read-only, в git не лежит.
+  dataset-dir: /data/dataset
+  # Артефакты ML-модели (ноутбук mostrans_handoff/mostrans/baseline_colab.ipynb → submissions/artifacts/).
+  # Почасовой прогноз без округления: route;date;hour;pred;model_version. Если файла нет —
+  # берётся submission_latest.csv из той же папки (route;date;hour;prediction).
+  forecast-file: /data/forecast/forecast_hourly.csv
+  # Коэффициенты поправок с измеренными эффектами и ссылками на источники; контракт ML-модели.
+  coefficients-file: /data/forecast/coefficients.json
+  ml-contract-file: /data/forecast/ml_contract.json
+  # Горизонт «год» от ML-модели, помесячно: month;route;boardings;low;high;source
+  year-file: /data/forecast/forecast_year_monthly.csv
+  # Трассы и остановки 9 маршрутов, снимок OpenStreetMap (ODbL).
+  geometry-file: /data/geo/routes_osm.json
+  # Агрегат сырых валидаций: route;date;hour;boardings;load (tools/build_load.sh).
+  load-file: /data/load/load_hourly.csv
+  # Версия, если в файле прогноза нет колонки model_version (старый формат сабмита).
+  forecast-model-version: ml-submission
+  # Коды validation_result, учитываемые в load (нагрузка на вагон).
+  load-codes: [1, 90]
