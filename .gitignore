@@ -63,3 +63,8 @@ desktop.ini
 mostrans_handoff/mostrans/dataset/
 # чекпоинты ноутбука (веса моделей, промежуточные расчёты) — живут на Google Drive
 checkpoints/
+
+outputs/
+work_submission.csv
+perf/.stats.tmp
+
