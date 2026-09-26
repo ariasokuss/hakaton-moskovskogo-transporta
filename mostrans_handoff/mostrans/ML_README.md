@@ -80,7 +80,7 @@ LightGBM (модель 2)  = 9 бустеров: 3 горизонта обуче
 | CV (среднее 5 фолдов) | ~0.893–0.894 |
 | Потоковый режим, горизонт 7 дней | ~0.913 |
 
-## Выход (`MyDrive/mostrans/submissions/`)`n`nВ репозитории сохранены только финальные артефакты в `data/forecast/` и `ml/artifacts/`; промежуточные сабмиты и архивы не являются частью Docker-поставки.
+## Выход (`MyDrive/mostrans/submissions/`)`r`n`r`nВ репозитории сохранены только финальные артефакты в `data/forecast/` и `ml/artifacts/`; промежуточные сабмиты и архивы не являются частью Docker-поставки.
 
 | Файл | Что |
 |---|---|
@@ -99,4 +99,5 @@ LOCAL_DATA_DIR=<папка с dataset.zip и external_data/> python tools/build_
 python pipeline/ingest_raw.py --src <папка с train.csv/test.csv или dataset.zip> --out pipeline/out
 python external_data/parse_deptrans_tg.py incidents --channel DtOperativno
 ```
+
 
