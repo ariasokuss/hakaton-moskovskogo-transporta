@@ -1,0 +1,26 @@
+=== /api/dashboard?date=2025-11-08 ===
+  Average:	0.2053 secs
+  Requests/sec:	242.7746
+  2.408 [5]	|
+  3.205 [5]	|
+  4.003 [5]	|
+  7.989 [5]	|
+  95% in 0.3043 secs
+  99% in 0.5215 secs
+  [200]	4884 responses
+=== /api/forecast?route=17&horizon=month&date=2025-11-15 ===
+  Average:	0.0779 secs
+  Requests/sec:	641.4829
+  0.779 [5]	|
+  1.295 [5]	|
+  95% in 0.1164 secs
+  99% in 0.1864 secs
+  [200]	12887 responses
+=== /api/attention?date=2025-11-08 ===
+  Average:	0.0284 secs
+  Requests/sec:	1759.7120
+  0.685 [5]	|
+  95% in 0.0808 secs
+  99% in 0.0953 secs
+  [200]	35205 responses
+tram-backend CPU 0.25% MEM 1.612GiB / 2GiB

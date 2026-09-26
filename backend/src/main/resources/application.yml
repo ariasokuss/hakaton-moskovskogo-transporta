@@ -1,0 +1,43 @@
+spring:
+  application:
+    name: tram-forecast
+  r2dbc:
+    url: r2dbc:postgresql://localhost:5432/tram
+    username: tram
+    password: tram
+    pool:
+      initial-size: 4
+      max-size: 16
+  flyway:
+    url: jdbc:postgresql://localhost:5432/tram
+    user: tram
+    password: tram
+    schemas: core,external
+  webflux:
+    problemdetails:
+      enabled: false   # ошибки оформляет ApiErrorHandler (RFC 9457, по-русски)
+
+server:
+  port: 8080
+  compression:
+    enabled: true
+    mime-types: application/json,text/csv
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+app:
+  # Каталог с датасетом организаторов (labels/). Монтируется read-only, в git не лежит.
+  dataset-dir: /data/dataset
+  # Артефакт прогноза от ML-команды: route;date;hour;prediction
+  forecast-file: /data/forecast/submission_latest.csv
+  # Трассы и остановки 9 маршрутов, снимок OpenStreetMap (ODbL).
+  geometry-file: /data/geo/routes_osm.json
+  # Агрегат сырых валидаций: route;date;hour;boardings;load (tools/build_load.sh).
+  load-file: /data/load/load_hourly.csv
+  forecast-model-version: ml-blend-profile-lgbm-cv0.883
+  # Коды validation_result, учитываемые в load (нагрузка на вагон).
+  load-codes: [1, 90]
