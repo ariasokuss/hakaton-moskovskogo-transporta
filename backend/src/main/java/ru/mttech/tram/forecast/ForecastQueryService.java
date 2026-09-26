@@ -7,11 +7,13 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.DoubleUnaryOperator;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import ru.mttech.tram.api.ApiException;
 import ru.mttech.tram.features.GeometryService;
 import ru.mttech.tram.features.GeometryService.StopShare;
+import ru.mttech.tram.ingest.ExternalDataService;
 import ru.mttech.tram.forecast.Model.ForecastSeries;
 import ru.mttech.tram.forecast.Model.Regime;
 import ru.mttech.tram.forecast.Model.Route;
@@ -58,6 +60,7 @@ public class ForecastQueryService {
 
     private final GridStore grid;
     private final GeometryService geometry;
+    private final ExternalDataService external;
 
     /**
      * Мемоизация главного экрана. Снимок неизменяемый, поэтому при тех же
@@ -72,9 +75,10 @@ public class ForecastQueryService {
                 }
             });
 
-    public ForecastQueryService(GridStore grid, GeometryService geometry) {
+    public ForecastQueryService(GridStore grid, GeometryService geometry, ExternalDataService external) {
         this.grid = grid;
         this.geometry = geometry;
+        this.external = external;
     }
 
     // -------------------------------------------------------------------------
@@ -91,6 +95,15 @@ public class ForecastQueryService {
         return m;
     }
 
+    /** Последняя дата, на которую есть прогноз (почасовой или годовой прогон). */
+    public LocalDate lastForecastDate() {
+        Snapshot s = grid.get();
+        LocalDate a = s.shortTerm() == null ? null : s.shortTerm().end();
+        LocalDate b = s.year() == null ? null : s.year().end();
+        if (a == null) return b;
+        return b == null || a.isAfter(b) ? a : b;
+    }
+
     public List<Route> routes() {
         return grid.get().routes();
     }
@@ -101,7 +114,7 @@ public class ForecastQueryService {
      */
     public Map<String, Object> dashboard(LocalDate date, Scenario sc, double threshold) {
         Snapshot s = grid.get();
-        String key = System.identityHashCode(s) + "|" + date + "|" + threshold + "|" + sc;
+        String key = System.identityHashCode(s) + "|" + System.identityHashCode(external.get()) + "|" + date + "|" + threshold + "|" + sc;
         Map<String, Object> hit = dashboardCache.get(key);
         if (hit != null) return hit;
         Map<String, Object> out = buildDashboard(s, date, sc, threshold);
@@ -112,7 +125,7 @@ public class ForecastQueryService {
     private Map<String, Object> buildDashboard(Snapshot s, LocalDate date, Scenario sc, double threshold) {
         requireForecast(s, date);
         List<RouteSeries> series = new ArrayList<>();
-        for (Route r : s.routes()) series.add(routeSeries(s, r, date, date, Granularity.hour, sc));
+        for (Route r : s.routes()) series.add(routeSeries(s, r, date, date, Granularity.hour, sc, ForecastQueryService::round));
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("date", date);
@@ -124,6 +137,9 @@ public class ForecastQueryService {
         out.put("series", series);
         out.put("attention", attention(date, sc, threshold));
         out.put("regimes", activeRegimes(s, date));
+        // Внешний контекст суток (календарь, архив прогноза погоды, события и сбои) — из схемы external,
+        // соединяется с прогнозом только здесь, на выдаче.
+        out.put("external", external.context(date));
         double f = series.stream().mapToDouble(RouteSeries::forecastTotal).sum();
         double b = series.stream().mapToDouble(RouteSeries::baselineTotal).sum();
         out.put("network", Map.of("forecastTotal", round(f), "baselineTotal", round(b),
@@ -141,6 +157,16 @@ public class ForecastQueryService {
      * см. {@link GeometryService.StopShare}). Без маршрута — все маршруты, проходящие через остановку.
      */
     public List<RouteSeries> series(Integer routeId, String stop, LocalDate from, LocalDate to, Granularity g, Scenario sc) {
+        return series(routeId, stop, from, to, g, sc, true);
+    }
+
+    /**
+     * rounded=false — значения без округления, для экспорта: округление к целому делается
+     * только на границе выгрузки, иначе 2.46 → 2.5 → 3 вместо 2.
+     */
+    public List<RouteSeries> series(Integer routeId, String stop, LocalDate from, LocalDate to, Granularity g, Scenario sc,
+                                    boolean rounded) {
+        DoubleUnaryOperator rd = rounded ? ForecastQueryService::round : v -> v;
         Snapshot s = grid.get();
         if (to.isBefore(from)) throw new ApiException(HttpStatus.BAD_REQUEST, "Некорректный интервал",
                 "Дата окончания " + to + " раньше даты начала " + from);
@@ -150,7 +176,7 @@ public class ForecastQueryService {
         requireForecast(s, to);
         List<RouteSeries> out = new ArrayList<>();
         for (Route r : s.routes()) {
-            if (routeId == null || r.id() == routeId) out.add(routeSeries(s, r, from, to, g, sc));
+            if (routeId == null || r.id() == routeId) out.add(routeSeries(s, r, from, to, g, sc, rd));
         }
         if (out.isEmpty()) throw new ApiException(HttpStatus.NOT_FOUND, "Маршрут не найден",
                 "Маршрута " + routeId + " нет в справочнике. Доступны: "
@@ -161,7 +187,7 @@ public class ForecastQueryService {
         for (RouteSeries rs : out) {
             double share = geometry.stops(rs.routeId()).stream()
                     .filter(x -> x.name().equalsIgnoreCase(name)).mapToDouble(StopShare::share).sum();
-            if (share > 0) atStop.add(scale(rs, share, name));
+            if (share > 0) atStop.add(scale(rs, share, name, rd));
         }
         if (atStop.isEmpty()) {
             List<String> known = out.stream().flatMap(rs -> geometry.stops(rs.routeId()).stream().map(StopShare::name))
@@ -175,13 +201,15 @@ public class ForecastQueryService {
     }
 
     /** Ряд маршрута в пересчёте на остановку: доля от прогноза, обычного уровня и нагрузки. Факта по остановке нет. */
-    private static RouteSeries scale(RouteSeries rs, double k, String stop) {
+    private static RouteSeries scale(RouteSeries rs, double k, String stop, DoubleUnaryOperator rd) {
         List<Point> pts = new ArrayList<>(rs.points().size());
         for (Point p : rs.points()) {
-            pts.add(new Point(p.t(), round(p.forecast() * k), round(p.load() * k), round(p.baseline() * k), null, p.deviationPct()));
+            pts.add(new Point(p.t(), rd.applyAsDouble(p.forecast() * k), rd.applyAsDouble(p.load() * k),
+                    rd.applyAsDouble(p.baseline() * k), null, p.deviationPct()));
         }
         return new RouteSeries(rs.routeId(), rs.shortName() + " · " + stop, rs.color(), pts,
-                round(rs.forecastTotal() * k), round(rs.loadTotal() * k), round(rs.baselineTotal() * k), rs.deviationPct());
+                rd.applyAsDouble(rs.forecastTotal() * k), rd.applyAsDouble(rs.loadTotal() * k),
+                rd.applyAsDouble(rs.baselineTotal() * k), rs.deviationPct());
     }
 
     /** Ранжированный список отклонений от обычного уровня — в обе стороны. */
@@ -214,7 +242,8 @@ public class ForecastQueryService {
 
     // -------------------------------------------------------------------------
 
-    private RouteSeries routeSeries(Snapshot s, Route r, LocalDate from, LocalDate to, Granularity g, Scenario sc) {
+    private RouteSeries routeSeries(Snapshot s, Route r, LocalDate from, LocalDate to, Granularity g, Scenario sc,
+                                    DoubleUnaryOperator rd) {
         int ri = s.routeIdx().get(r.id());
         Map<String, double[]> buckets = new LinkedHashMap<>();   // t -> [forecast, baseline, actual, actualSeen, load]
         for (LocalDate d = from; !d.isAfter(to); d = d.plusDays(1)) {
@@ -242,10 +271,10 @@ public class ForecastQueryService {
             ft += a[0];
             bt += a[1];
             lt += a[4];
-            pts.add(new Point(e.getKey(), round(a[0]), round(a[4]), round(a[1]), a[3] > 0 ? a[2] : null,
-                    a[1] > 0 ? round((a[0] - a[1]) / a[1] * 100) : null));
+            pts.add(new Point(e.getKey(), rd.applyAsDouble(a[0]), rd.applyAsDouble(a[4]), rd.applyAsDouble(a[1]),
+                    a[3] > 0 ? a[2] : null, a[1] > 0 ? round((a[0] - a[1]) / a[1] * 100) : null));
         }
-        return new RouteSeries(r.id(), r.shortName(), r.color(), pts, round(ft), round(lt), round(bt),
+        return new RouteSeries(r.id(), r.shortName(), r.color(), pts, rd.applyAsDouble(ft), rd.applyAsDouble(lt), rd.applyAsDouble(bt),
                 bt > 0 ? round((ft - bt) / bt * 100) : null);
     }
 

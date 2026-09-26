@@ -28,6 +28,10 @@ management:
     web:
       exposure:
         include: health,info,metrics
+  endpoint:
+    health:
+      # Жюри видит, что загружено: маршруты, дни факта, версии прогонов.
+      show-details: always
 
 app:
   # Каталог с датасетом организаторов (labels/). Монтируется read-only, в git не лежит.
@@ -49,3 +53,12 @@ app:
   forecast-model-version: ml-submission
   # Коды validation_result, учитываемые в load (нагрузка на вагон).
   load-codes: [1, 90]
+  # Сетка сабмита организаторов (test_submission.csv): 10 маршрутов × 61 день × 24 часа = 14 640 строк.
+  # Маршрута 5 нет в справочнике сервиса (ошибка выгрузки), в сабмите он идёт нулями.
+  submission-routes: [1, 5, 7, 11, 12, 17, 25, 26, 28, 50]
+  external:
+    # Онлайн-обновление (балл пробок Яндекса) фоном; снимок из dir грузится всегда.
+    enabled: false
+    dir: /data/external
+    timeout: 2s
+    yandex-traffic-url: https://export.yandex.ru/bar/reginfo.xml?region=213

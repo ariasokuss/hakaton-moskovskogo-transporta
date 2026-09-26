@@ -29,6 +29,7 @@ function measured(m: Record<string, any> | null | undefined): Partial<Record<key
 }
 
 // Корректирующие коэффициенты (критерий 2в): пересчёт сразу, модель не трогается.
+// Диапазон 0.3–3.0 совпадает с тем, что принимает API (Scenario на бэкенде).
 export function ScenarioPanel({ value, onChange }: { value: Scenario; onChange: (s: Scenario) => void }) {
   const [notes, setNotes] = useState<Partial<Record<keyof Scenario, string>>>({})
   useEffect(() => {
@@ -46,7 +47,7 @@ export function ScenarioPanel({ value, onChange }: { value: Scenario; onChange: 
       {KNOBS.map(k => (
         <label key={k.key} className="knob">
           <span className="knob-label">{k.label}<small>{k.hint}</small>{notes[k.key] && <small className="measured">{notes[k.key]}</small>}</span>
-          <input type="range" min={0.5} max={1.5} step={0.05} value={value[k.key]}
+          <input type="range" min={0.3} max={3} step={0.05} value={value[k.key]}
                  onChange={e => onChange({ ...value, [k.key]: Number(e.target.value) })} />
           <span className="knob-val">×{value[k.key].toFixed(2)}</span>
         </label>

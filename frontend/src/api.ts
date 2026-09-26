@@ -14,19 +14,28 @@ export type Attention = {
   forecast: number; baseline: number; delta: number; deviationPct: number; peakHour: number; reason: string | null
 }
 export type Regime = { routeId: number; from: string; to: string | null; kind: string; note: string; sourceUrl: string | null }
+export type ExternalDay = {
+  dayType: string | null; dayOff: boolean; holidayName: string | null; schoolHoliday: boolean
+  tempMin: number | null; tempMax: number | null; precipitationMm: number | null; snowfallCm: number | null; weatherKind: string | null
+}
+export type ExternalEvent = { from: string; to: string | null; category: string; routes: number[]; title: string | null; url: string }
 export type Dashboard = {
   date: string; dayOfWeek: number
   scenario: Record<string, number>
   model: { modelVersion: string; horizon: string; from: string; to: string } | null
   routes: Route[]; series: RouteSeries[]; attention: Attention[]; regimes: Regime[]
   network: { forecastTotal: number; baselineTotal: number; deviationPct: number }
+  external?: { day: ExternalDay | null; events: ExternalEvent[] } | null
 }
+export type Period = { from: string; to: string; modelVersion: string }
 export type Meta = {
   actualFrom: string; actualTo: string; defaultDate: string
-  shortTerm: { from: string; to: string; modelVersion: string } | null
-  year: { from: string; to: string; modelVersion: string } | null
+  shortTerm: Period | null
+  year: Period | null
 }
+export type StopShare = { routeId: number; stop: string; lat: number; lon: number; tramRoutesAtStop: number; share: number }
 export type Scenario = { kWeather: number; kEvent: number; kSeason: number; kTraffic: number; kManual: number }
+export type Horizon = 'day' | 'month' | 'year'
 
 export class ApiError extends Error {
   constructor(public title: string, detail: string) { super(detail) }
@@ -49,4 +58,29 @@ export async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
 
 export function scenarioQuery(s: Scenario): string {
   return Object.entries(s).filter(([, v]) => v !== 1).map(([k, v]) => `&${k}=${v}`).join('')
+}
+
+/** Сумма рядов по точкам — сеть целиком или остановка на нескольких маршрутах. */
+export function sumSeries(series: RouteSeries[]): Point[] {
+  if (series.length === 0) return []
+  return series[0].points.map((p, i) => ({
+    t: p.t, deviationPct: null, actual: null,
+    forecast: series.reduce((a, s) => a + (s.points[i]?.forecast ?? 0), 0),
+    load: series.reduce((a, s) => a + (s.points[i]?.load ?? 0), 0),
+    baseline: series.reduce((a, s) => a + (s.points[i]?.baseline ?? 0), 0),
+  }))
+}
+
+/** Интервал горизонта — тот же, что считает бэкенд (ForecastController.Window): для экспорта «как на экране». */
+export function horizonWindow(h: Horizon, date: string, meta: Meta | null): { from: string; to: string; granularity: string } {
+  if (h === 'day') return { from: date, to: date, granularity: 'hour' }
+  const [y, m] = date.split('-').map(Number)
+  const first = `${y}-${String(m).padStart(2, '0')}-01`
+  if (h === 'month') {
+    const last = new Date(Date.UTC(y, m, 0)).getUTCDate()
+    return { from: first, to: `${y}-${String(m).padStart(2, '0')}-${last}`, granularity: 'day' }
+  }
+  const end = new Date(Date.UTC(y + 1, m - 1, 0)).toISOString().slice(0, 10)
+  const lastForecast = [meta?.shortTerm?.to, meta?.year?.to].filter(Boolean).sort().pop()
+  return { from: first, to: lastForecast && lastForecast < end ? lastForecast : end, granularity: 'month' }
 }

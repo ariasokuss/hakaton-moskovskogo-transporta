@@ -61,7 +61,7 @@ public class ForecastRunService {
 
     /** Годовой прогон при старте: если его нет или появился помесячный прогноз ML, а прогон ещё без него. */
     public void ensureYearRun() {
-        String expected = mlMonthly().isEmpty() ? YEAR_MODEL : YEAR_MODEL_ML;
+        String expected = yearModelName();
         Long n = db.sql("""
                 SELECT count(*) AS c FROM core.forecast_run
                 WHERE horizon='year' AND status IN ('succeeded','running','pending') AND model_version = :m""")
@@ -71,7 +71,7 @@ public class ForecastRunService {
 
     /** Ставит годовой прогон в очередь и сразу возвращает его id. Расчёт идёт в фоне. */
     public long startYearRun() {
-        long runId = createRun("year", mlMonthly().isEmpty() ? YEAR_MODEL : YEAR_MODEL_ML,
+        long runId = createRun("year", yearModelName(),
                 YEAR_START, YEAR_START.plusDays(364), "pending");
         Mono.fromRunnable(() -> computeYear(runId))
                 .subscribeOn(Schedulers.boundedElastic())
@@ -134,7 +134,7 @@ public class ForecastRunService {
                     }
                 }
                 db.sql("UPDATE core.forecast_run SET model_version = :m WHERE run_id = :id")
-                        .bind("m", YEAR_MODEL_ML).bind("id", runId).then().block();
+                        .bind("m", yearModelName()).bind("id", runId).then().block();
             }
             List<String> rows = new ArrayList<>();
             for (int day = 0; day < 365; day++) {
@@ -142,7 +142,7 @@ public class ForecastRunService {
                 for (int ri = 0; ri < nr; ri++) {
                     int routeId = s.routes().get(ri).id();
                     for (int h = 0; h < 24; h++) {
-                        rows.add("(" + runId + "," + routeId + ",'" + d + "'," + h + "," + Math.round(v[ri][day][h] * 1000) / 1000.0 + ")");
+                        rows.add("(" + runId + "," + routeId + ",'" + d + "'," + h + "," + v[ri][day][h] + ")");
                     }
                 }
             }
@@ -157,6 +157,30 @@ public class ForecastRunService {
             finish(runId, e.getMessage());
             throw e;
         }
+    }
+
+    /**
+     * Имя модели годового прогона. С помесячным прогнозом ML в имя входит его версия: новый прогон ML
+     * (другой model_version в forecast_year_monthly.csv) → новое имя → годовой прогон пересчитывается при старте.
+     */
+    String yearModelName() {
+        if (mlMonthly().isEmpty()) return YEAR_MODEL;
+        String version = mlMonthlyVersion();
+        return version == null ? YEAR_MODEL_ML : YEAR_MODEL_ML + "@" + version;
+    }
+
+    /** model_version из первой строки помесячного прогноза ML или null, если колонки нет. */
+    String mlMonthlyVersion() {
+        try {
+            List<String[]> rows = new ArrayList<>();
+            String[] head = DataIngestService.readCsvWithHeader(Path.of(props.yearFile()), rows);
+            for (int i = 0; i < head.length; i++) {
+                if ("model_version".equals(head[i].trim()) && !rows.isEmpty() && rows.get(0).length > i) return rows.get(0)[i].trim();
+            }
+        } catch (RuntimeException e) {
+            log.warn("Не удалось прочитать версию годового прогноза ML: {}", e.getMessage());
+        }
+        return null;
     }
 
     /** Помесячный прогноз ML: ключ «маршрут|ГГГГ-ММ» → посадки. Пусто, если файла нет или он не читается. */

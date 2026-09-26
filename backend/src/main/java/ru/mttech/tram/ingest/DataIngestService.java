@@ -42,19 +42,38 @@ public class DataIngestService {
         this.runs = runs;
     }
 
+    /** Стартовая загрузка завершена (успешно или нет). До этого health отвечает DOWN — см. StartupHealthIndicator. */
+    private volatile boolean started;
+    private volatile String startupError;
+
+    public boolean started() { return started; }
+    public String startupError() { return startupError; }
+
     @EventListener(ApplicationReadyEvent.class)
     public void onReady() {
-        Set<Integer> routes = Set.copyOf(db.sql("SELECT route_id FROM core.route")
-                .map((r, m) -> ((Number) r.get("route_id")).intValue()).all().collectList().block());
+        try {
+            Set<Integer> routes = Set.copyOf(db.sql("SELECT route_id FROM core.route")
+                    .map((r, m) -> ((Number) r.get("route_id")).intValue()).all().collectList().block());
 
-        ingestLabels(routes);
-        ingestLoad(routes);
-        importForecast(routes);
-        grid.reload();
-        runs.ensureYearRun();
+            ingestLabels(routes);
+            ingestLoad(routes);
+            importForecast(routes);
+            grid.reload();
+            runs.ensureYearRun();
+        } catch (RuntimeException e) {
+            // Сервис остаётся живым и отвечает понятными ошибками, а не падает целиком.
+            startupError = e.getMessage();
+            log.error("Стартовая загрузка данных не удалась", e);
+        } finally {
+            started = true;
+        }
     }
 
-    /** Факт по часам из labels/. Маршруты вне справочника (маршрут 5) отбрасываются. */
+    /**
+     * Факт по часам из labels/. Маршруты вне справочника (маршрут 5) отбрасываются.
+     * Датасета нет (чистый клон репозитория) — факт берётся из data/load/load_hourly.csv:
+     * это агрегат тех же сырых валидаций, его boardings совпадает с labels на всех 57 551 ключах.
+     */
     void ingestLabels(Set<Integer> routes) {
         Long existing = db.sql("SELECT count(*) AS c FROM core.actual_hourly")
                 .map((r, m) -> ((Number) r.get("c")).longValue()).one().block();
@@ -63,12 +82,16 @@ public class DataIngestService {
             return;
         }
         Path dir = Path.of(props.datasetDir(), "labels");
+        List<Path> files = List.of(dir.resolve("labels_day_train.csv"), dir.resolve("labels_day_test.csv"));
+        if (files.stream().noneMatch(Files::exists)) {
+            ingestActualsFromLoad(routes);
+            return;
+        }
         List<String> rows = new ArrayList<>();
         int skipped = 0;
-        for (String f : List.of("labels_day_train.csv", "labels_day_test.csv")) {
-            Path p = dir.resolve(f);
+        for (Path p : files) {
             if (!Files.exists(p)) {
-                log.warn("Нет файла {}: сервис работает без исторического факта", p);
+                log.warn("Нет файла {}: факт будет неполным", p);
                 continue;
             }
             for (String[] c : readCsv(p)) {
@@ -83,6 +106,26 @@ public class DataIngestService {
         insertBatched("INSERT INTO core.actual_hourly (route_id, fact_date, hour, boardings) VALUES ",
                 " ON CONFLICT DO NOTHING", rows);
         log.info("Загружено строк факта: {}, отброшено (маршрут вне справочника): {}", rows.size(), skipped);
+    }
+
+    /** Факт и нагрузка из агрегата сырых валидаций (route;date;hour;boardings;load) — когда labels/ не смонтирован. */
+    void ingestActualsFromLoad(Set<Integer> routes) {
+        Path p = Path.of(props.loadFile());
+        if (!Files.exists(p)) {
+            log.warn("Нет ни labels/ в {}, ни {}: сервис работает без исторического факта", props.datasetDir(), p);
+            return;
+        }
+        List<String> rows = new ArrayList<>();
+        for (String[] c : readCsv(p)) {
+            int route = Integer.parseInt(c[0]);
+            if (!routes.contains(route)) continue;
+            LocalDate date = LocalDate.parse(c[1]);
+            rows.add("(" + route + ",'" + date + "'," + Integer.parseInt(c[2]) + "," + Integer.parseInt(c[3])
+                    + "," + Integer.parseInt(c[4]) + ")");
+        }
+        insertBatched("INSERT INTO core.actual_hourly (route_id, fact_date, hour, boardings, load) VALUES ",
+                " ON CONFLICT DO NOTHING", rows);
+        log.info("Датасета нет — факт загружен из {}: {} строк", p.getFileName(), rows.size());
     }
 
     /**
