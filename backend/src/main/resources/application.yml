@@ -28,16 +28,37 @@ management:
     web:
       exposure:
         include: health,info,metrics
+  endpoint:
+    health:
+      # Жюри видит, что загружено: маршруты, дни факта, версии прогонов.
+      show-details: always
 
 app:
   # Каталог с датасетом организаторов (labels/). Монтируется read-only, в git не лежит.
   dataset-dir: /data/dataset
-  # Артефакт прогноза от ML-команды: route;date;hour;prediction
-  forecast-file: /data/forecast/submission_latest.csv
+  # Артефакты ML-модели (ноутбук mostrans_handoff/mostrans/baseline_colab.ipynb → submissions/artifacts/).
+  # Почасовой прогноз без округления: route;date;hour;pred;model_version. Если файла нет —
+  # берётся submission_latest.csv из той же папки (route;date;hour;prediction).
+  forecast-file: /data/forecast/forecast_hourly.csv
+  # Коэффициенты поправок с измеренными эффектами и ссылками на источники; контракт ML-модели.
+  coefficients-file: /data/forecast/coefficients.json
+  ml-contract-file: /data/forecast/ml_contract.json
+  # Горизонт «год» от ML-модели, помесячно: month;route;boardings;low;high;source
+  year-file: /data/forecast/forecast_year_monthly.csv
   # Трассы и остановки 9 маршрутов, снимок OpenStreetMap (ODbL).
   geometry-file: /data/geo/routes_osm.json
   # Агрегат сырых валидаций: route;date;hour;boardings;load (tools/build_load.sh).
   load-file: /data/load/load_hourly.csv
-  forecast-model-version: ml-blend-profile-lgbm-cv0.883
+  # Версия, если в файле прогноза нет колонки model_version (старый формат сабмита).
+  forecast-model-version: ml-submission
   # Коды validation_result, учитываемые в load (нагрузка на вагон).
   load-codes: [1, 90]
+  # Сетка сабмита организаторов (test_submission.csv): 10 маршрутов × 61 день × 24 часа = 14 640 строк.
+  # Маршрута 5 нет в справочнике сервиса (ошибка выгрузки), в сабмите он идёт нулями.
+  submission-routes: [1, 5, 7, 11, 12, 17, 25, 26, 28, 50]
+  external:
+    # Онлайн-обновление (балл пробок Яндекса) фоном; снимок из dir грузится всегда.
+    enabled: false
+    dir: /data/external
+    timeout: 2s
+    yandex-traffic-url: https://export.yandex.ru/bar/reginfo.xml?region=213

@@ -3,7 +3,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY . .
-RUN npx vite build
+# tsc -b проверяет типы: сборка без проверки типов пропустила бы ошибки TypeScript.
+RUN npm run build
 
 FROM nginx:1.29-alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf

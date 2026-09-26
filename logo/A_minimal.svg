@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="700" height="170" viewBox="0 0 700 170"><g transform="translate(20 21)">
+<defs><clipPath id="ca"><circle cx="64" cy="64" r="60"/></clipPath></defs>
+<circle cx="64" cy="64" r="60" fill="#0A2540"/>
+<circle cx="64" cy="50" r="30" fill="#FFFFFF"/>
+<g clip-path="url(#ca)"><path d="M0 84 Q 16 76 32 84 T 64 84 T 96 84 T 128 84 V128 H0Z" fill="#14B8C4"/></g></g><text x="170" y="92" font-family="Montserrat, 'Segoe UI', Arial, sans-serif" font-size="50" font-weight="700" fill="#0A2540" letter-spacing="3">окулус<tspan fill="#14B8C4" font-weight="400"> аква</tspan></text>
+<text x="172" y="128" font-family="Montserrat, 'Segoe UI', Arial, sans-serif" font-size="17" fill="#5B7285" letter-spacing="1">взгляд с орбиты — решение на земле</text></svg>

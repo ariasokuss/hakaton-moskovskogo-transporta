@@ -124,6 +124,7 @@ public class ForecastController {
      */
     @GetMapping("/forecast")
     public List<RouteSeries> forecast(@RequestParam(required = false) Integer route,
+                                      @RequestParam(required = false) String stop,
                                       @RequestParam(defaultValue = "day") String horizon,
                                       @RequestParam(required = false) LocalDate date,
                                       @RequestParam(required = false) LocalDate from,
@@ -136,14 +137,43 @@ public class ForecastController {
                                       @RequestParam(defaultValue = "1") double kManual) {
         Scenario sc = new Scenario(kWeather, kEvent, kSeason, kTraffic, kManual);
         Window w = Window.resolve(horizon, date, from, to, granularity, query);
-        return query.series(route, w.from, w.to, w.granularity, sc);
+        return query.series(route, stop, w.from, w.to, w.granularity, sc);
+    }
+
+    /**
+     * Остановки маршрута (или всех маршрутов) с долей посадок — для параметра stop в /api/forecast.
+     * Доля — оценка распределением (в валидациях остановки нет), метод описан в README.
+     */
+    @GetMapping("/stops")
+    public List<Map<String, Object>> stops(@RequestParam(required = false) Integer route) {
+        List<Map<String, Object>> out = new java.util.ArrayList<>();
+        for (Route r : query.routes()) {
+            if (route != null && r.id() != route) continue;
+            for (GeometryService.StopShare s : geometry.stops(r.id())) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("routeId", r.id());
+                m.put("stop", s.name());
+                m.put("lat", s.lat());
+                m.put("lon", s.lon());
+                m.put("tramRoutesAtStop", s.routesAtStop());
+                m.put("share", Math.round(s.share() * 10000) / 10000.0);
+                out.add(m);
+            }
+        }
+        if (route != null && out.isEmpty()) throw new ApiException(HttpStatus.NOT_FOUND, "Нет остановок",
+                "Для маршрута " + route + " нет геометрии остановок. Маршруты с геометрией — /api/routes (hasGeometry)");
+        return out;
     }
 
     @GetMapping("/attention")
     public List<Attention> attention(@RequestParam LocalDate date,
                                      @RequestParam(defaultValue = "10") double threshold,
+                                     @RequestParam(defaultValue = "1") double kWeather,
+                                     @RequestParam(defaultValue = "1") double kEvent,
+                                     @RequestParam(defaultValue = "1") double kSeason,
+                                     @RequestParam(defaultValue = "1") double kTraffic,
                                      @RequestParam(defaultValue = "1") double kManual) {
-        return query.attention(date, new Scenario(1, 1, 1, 1, kManual), threshold);
+        return query.attention(date, new Scenario(kWeather, kEvent, kSeason, kTraffic, kManual), threshold);
     }
 
     /** Асинхронный запуск годового прогона. Возвращает id сразу, расчёт идёт в фоне. */
@@ -173,7 +203,13 @@ public class ForecastController {
                 case "day" -> new Window(d, d, g == null ? Granularity.hour : g);
                 case "month" -> new Window(d.withDayOfMonth(1), d.withDayOfMonth(d.lengthOfMonth()),
                         g == null ? Granularity.day : g);
-                case "year" -> new Window(d, d.plusDays(364), g == null ? Granularity.month : g);
+                // Год — 12 календарных месяцев от месяца даты, но не дальше последнего прогона.
+                case "year" -> {
+                    LocalDate start = d.withDayOfMonth(1);
+                    LocalDate end = start.plusYears(1).minusDays(1);
+                    LocalDate last = q.lastForecastDate();
+                    yield new Window(start, last != null && end.isAfter(last) ? last : end, g == null ? Granularity.month : g);
+                }
                 default -> throw new ApiException(HttpStatus.BAD_REQUEST, "Неизвестный горизонт",
                         "horizon должен быть одним из: day, month, year. Получено: " + horizon);
             };

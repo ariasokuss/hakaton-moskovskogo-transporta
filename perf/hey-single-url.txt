@@ -1,0 +1,20 @@
+=== /api/dashboard?date=2025-11-08
+  Average:	0.0088 secs
+  Requests/sec:	5672.5563
+  0.058 [5380]	|■■
+  95% in 0.0550 secs
+  99% in 0.0690 secs
+  [200]	113735 responses
+=== /api/forecast?route=17&horizon=month&date=2025-11-15
+  Average:	0.0165 secs
+  Requests/sec:	3030.4703
+  0.026 [50700]	|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+  95% in 0.0646 secs
+  99% in 0.0731 secs
+  [200]	60714 responses
+=== /api/attention?date=2025-11-08
+  Average:	0.0094 secs
+  Requests/sec:	5323.9741
+  95% in 0.0557 secs
+  99% in 0.0660 secs
+  [200]	106518 responses

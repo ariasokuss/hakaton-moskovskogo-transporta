@@ -11,7 +11,10 @@ java {
     toolchain { languageVersion = JavaLanguageVersion.of(21) }
 }
 
-repositories { mavenCentral() }
+repositories {
+    maven("https://maven-central.storage-download.googleapis.com/maven2/")   // зеркало Maven Central (см. settings.gradle.kts)
+    mavenCentral()
+}
 
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter-webflux")

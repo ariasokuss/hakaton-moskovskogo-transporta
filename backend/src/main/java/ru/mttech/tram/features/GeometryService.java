@@ -32,6 +32,16 @@ public class GeometryService {
     private final ObjectMapper json;
     private volatile Map<String, Object> geoJson = Map.of("type", "FeatureCollection", "features", List.of());
 
+    /**
+     * Доля остановки в посадках маршрута. В валидациях остановки нет (place_id — депо), поэтому
+     * остановочный прогноз — это распределение прогноза маршрута, а не наблюдение:
+     * вес остановки = 1 + 0.5 × (число других трамвайных маршрутов на ней) — пересадочные узлы
+     * собирают больше посадок; остановка на обоих направлениях считается дважды. Доли маршрута в сумме = 1.
+     */
+    public record StopShare(String name, double lat, double lon, int routesAtStop, double share) {}
+
+    private volatile Map<Integer, List<StopShare>> stopShares = Map.of();
+
     public GeometryService(AppProperties props, ObjectMapper json) {
         this.props = props;
         this.json = json;
@@ -61,7 +71,7 @@ public class GeometryService {
                 String name = s.get("name").asString();
                 double lat = s.get("lat").asDouble(), lon = s.get("lon").asDouble();
                 // Остановки в пределах ~50 м с одним именем считаем одной точкой на карте.
-                String key = name + "|" + Math.round(lat * 2000) + "|" + Math.round(lon * 1000);
+                String key = stopKey(name, lat, lon);
                 Map<String, Object> st = stops.computeIfAbsent(key, k -> {
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("name", name);
@@ -74,6 +84,28 @@ public class GeometryService {
                 if (!rs.contains(routeId)) rs.add(routeId);
             }
         }
+        Map<Integer, Map<String, Double>> weights = new LinkedHashMap<>();
+        for (JsonNode r : root.get("routes")) {
+            int routeId = r.get("route_id").asInt();
+            for (JsonNode s : r.get("stops")) {
+                String key = stopKey(s.get("name").asString(), s.get("lat").asDouble(), s.get("lon").asDouble());
+                int k = ((List<?>) stops.get(key).get("routes")).size();
+                weights.computeIfAbsent(routeId, x -> new LinkedHashMap<>()).merge(key, 1 + 0.5 * (k - 1), Double::sum);
+            }
+        }
+        Map<Integer, List<StopShare>> shares = new LinkedHashMap<>();
+        weights.forEach((routeId, w) -> {
+            double total = w.values().stream().mapToDouble(Double::doubleValue).sum();
+            List<StopShare> list = new ArrayList<>();
+            w.forEach((key, v) -> {
+                Map<String, Object> st = stops.get(key);
+                list.add(new StopShare((String) st.get("name"), (Double) st.get("lat"), (Double) st.get("lon"),
+                        ((List<?>) st.get("routes")).size(), v / total));
+            });
+            shares.put(routeId, List.copyOf(list));
+        });
+        stopShares = Map.copyOf(shares);
+
         for (Map<String, Object> st : stops.values()) {
             features.add(Map.of("type", "Feature",
                     "geometry", Map.of("type", "Point", "coordinates", List.of(st.get("lon"), st.get("lat"))),
@@ -87,5 +119,15 @@ public class GeometryService {
 
     public Map<String, Object> geoJson() {
         return geoJson;
+    }
+
+    /** Остановки маршрута с долями посадок (пусто, если геометрии нет). */
+    public List<StopShare> stops(int routeId) {
+        return stopShares.getOrDefault(routeId, List.of());
+    }
+
+    /** Остановки в пределах ~50 м с одним именем — одна точка. */
+    static String stopKey(String name, double lat, double lon) {
+        return name + "|" + Math.round(lat * 2000) + "|" + Math.round(lon * 1000);
     }
 }

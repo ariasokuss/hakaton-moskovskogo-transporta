@@ -1,7 +1,11 @@
 package ru.mttech.tram.forecast;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -10,7 +14,9 @@ import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import ru.mttech.tram.config.AppProperties;
 import ru.mttech.tram.forecast.Model.Snapshot;
+import ru.mttech.tram.ingest.DataIngestService;
 
 /**
  * Асинхронные прогоны расчёта. Каждый прогон — строка forecast_run со статусом.
@@ -25,13 +31,17 @@ public class ForecastRunService {
     /** Годовой горизонт: с начала прогнозного периода на 365 дней. */
     static final LocalDate YEAR_START = LocalDate.of(2025, 11, 1);
     static final String YEAR_MODEL = "seasonal-profile-year-v1";
+    /** Тот же профиль, но помесячные суммы маршрутов — от ML-модели (artifacts/forecast_year_monthly.csv). */
+    static final String YEAR_MODEL_ML = "seasonal-profile-year-v1+ml-monthly";
 
     private final DatabaseClient db;
     private final GridStore grid;
+    private final AppProperties props;
 
-    public ForecastRunService(DatabaseClient db, GridStore grid) {
+    public ForecastRunService(DatabaseClient db, GridStore grid, AppProperties props) {
         this.db = db;
         this.grid = grid;
+        this.props = props;
     }
 
     public long createRun(String horizon, String model, LocalDate from, LocalDate to, String status) {
@@ -49,15 +59,20 @@ public class ForecastRunService {
                 .bind("id", runId).then().block();
     }
 
+    /** Годовой прогон при старте: если его нет или появился помесячный прогноз ML, а прогон ещё без него. */
     public void ensureYearRun() {
-        Long n = db.sql("SELECT count(*) AS c FROM core.forecast_run WHERE horizon='year' AND status IN ('succeeded','running','pending')")
-                .map((r, m) -> ((Number) r.get("c")).longValue()).one().block();
+        String expected = yearModelName();
+        Long n = db.sql("""
+                SELECT count(*) AS c FROM core.forecast_run
+                WHERE horizon='year' AND status IN ('succeeded','running','pending') AND model_version = :m""")
+                .bind("m", expected).map((r, m) -> ((Number) r.get("c")).longValue()).one().block();
         if (n == null || n == 0) startYearRun();
     }
 
     /** Ставит годовой прогон в очередь и сразу возвращает его id. Расчёт идёт в фоне. */
     public long startYearRun() {
-        long runId = createRun("year", YEAR_MODEL, YEAR_START, YEAR_START.plusDays(364), "pending");
+        long runId = createRun("year", yearModelName(),
+                YEAR_START, YEAR_START.plusDays(364), "pending");
         Mono.fromRunnable(() -> computeYear(runId))
                 .subscribeOn(Schedulers.boundedElastic())
                 .subscribe(v -> {}, e -> log.error("Годовой прогон {} упал", runId, e));
@@ -88,16 +103,46 @@ public class ForecastRunService {
                 return;
             }
             double[][] monthFactor = monthFactors(s);
-            List<String> rows = new ArrayList<>();
+            int nr = s.routes().size();
+            double[][][] v = new double[nr][365][24];
             for (int day = 0; day < 365; day++) {
                 LocalDate d = YEAR_START.plusDays(day);
                 int dow = d.getDayOfWeek().getValue() - 1;
-                for (int ri = 0; ri < s.routes().size(); ri++) {
+                for (int ri = 0; ri < nr; ri++) {
                     double f = monthFactor[ri][d.getMonthValue() - 1];
+                    for (int h = 0; h < 24; h++) v[ri][day][h] = s.baseline()[ri][dow][h] * f;
+                }
+            }
+            // Помесячные суммы маршрутов от ML-модели: профиль задаёт раскладку по дням и часам,
+            // ML — объём месяца. Нет файла — остаётся сезонный профиль сервиса.
+            Map<String, Double> ml = mlMonthly();
+            if (!ml.isEmpty()) {
+                for (int ri = 0; ri < nr; ri++) {
+                    int routeId = s.routes().get(ri).id();
+                    Map<YearMonth, Double> sum = new HashMap<>();
+                    for (int day = 0; day < 365; day++) {
+                        double t = 0;
+                        for (int h = 0; h < 24; h++) t += v[ri][day][h];
+                        sum.merge(YearMonth.from(YEAR_START.plusDays(day)), t, Double::sum);
+                    }
+                    for (int day = 0; day < 365; day++) {
+                        YearMonth ym = YearMonth.from(YEAR_START.plusDays(day));
+                        Double target = ml.get(routeId + "|" + ym);
+                        double base = sum.getOrDefault(ym, 0.0);
+                        if (target == null || base <= 0) continue;
+                        for (int h = 0; h < 24; h++) v[ri][day][h] *= target / base;
+                    }
+                }
+                db.sql("UPDATE core.forecast_run SET model_version = :m WHERE run_id = :id")
+                        .bind("m", yearModelName()).bind("id", runId).then().block();
+            }
+            List<String> rows = new ArrayList<>();
+            for (int day = 0; day < 365; day++) {
+                LocalDate d = YEAR_START.plusDays(day);
+                for (int ri = 0; ri < nr; ri++) {
                     int routeId = s.routes().get(ri).id();
                     for (int h = 0; h < 24; h++) {
-                        double v = s.baseline()[ri][dow][h] * f;
-                        rows.add("(" + runId + "," + routeId + ",'" + d + "'," + h + "," + Math.round(v * 1000) / 1000.0 + ")");
+                        rows.add("(" + runId + "," + routeId + ",'" + d + "'," + h + "," + v[ri][day][h] + ")");
                     }
                 }
             }
@@ -112,6 +157,60 @@ public class ForecastRunService {
             finish(runId, e.getMessage());
             throw e;
         }
+    }
+
+    /**
+     * Имя модели годового прогона. С помесячным прогнозом ML в имя входит его версия: новый прогон ML
+     * (другой model_version в forecast_year_monthly.csv) → новое имя → годовой прогон пересчитывается при старте.
+     */
+    String yearModelName() {
+        if (mlMonthly().isEmpty()) return YEAR_MODEL;
+        String version = mlMonthlyVersion();
+        return version == null ? YEAR_MODEL_ML : YEAR_MODEL_ML + "@" + version;
+    }
+
+    /** model_version из первой строки помесячного прогноза ML или null, если колонки нет. */
+    String mlMonthlyVersion() {
+        try {
+            List<String[]> rows = new ArrayList<>();
+            String[] head = DataIngestService.readCsvWithHeader(Path.of(props.yearFile()), rows);
+            for (int i = 0; i < head.length; i++) {
+                if ("model_version".equals(head[i].trim()) && !rows.isEmpty() && rows.get(0).length > i) return rows.get(0)[i].trim();
+            }
+        } catch (RuntimeException e) {
+            log.warn("Не удалось прочитать версию годового прогноза ML: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    /** Помесячный прогноз ML: ключ «маршрут|ГГГГ-ММ» → посадки. Пусто, если файла нет или он не читается. */
+    Map<String, Double> mlMonthly() {
+        Map<String, Double> out = new HashMap<>();
+        if (props.yearFile() == null) return out;
+        Path p = Path.of(props.yearFile());
+        if (!Files.exists(p)) return out;
+        try {
+            List<String[]> rows = new ArrayList<>();
+            String[] head = DataIngestService.readCsvWithHeader(p, rows);
+            int im = -1, ir = -1, ib = -1;
+            for (int i = 0; i < head.length; i++) {
+                switch (head[i].trim()) {
+                    case "month" -> im = i;
+                    case "route" -> ir = i;
+                    case "boardings" -> ib = i;
+                    default -> { }
+                }
+            }
+            if (im < 0 || ir < 0 || ib < 0) {
+                log.warn("В {} нет колонок month;route;boardings — годовой прогноз без ML", p);
+                return out;
+            }
+            for (String[] c : rows) out.put(Integer.parseInt(c[ir]) + "|" + c[im].substring(0, 7), Double.parseDouble(c[ib]));
+        } catch (RuntimeException e) {
+            log.warn("Не удалось прочитать {}: {} — годовой прогноз без ML", p, e.getMessage());
+            out.clear();
+        }
+        return out;
     }
 
     /** Отношение среднего дневного объёма месяца к сентябрю–октябрю (опорный уровень). */

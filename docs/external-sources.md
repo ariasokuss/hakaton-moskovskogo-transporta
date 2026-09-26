@@ -84,7 +84,7 @@
 **Влияние на прогноз:** внутри окна ноябрь–декабрь режимы разные (ноябрь — работы
 идут, декабрь — закончены). Цена ошибки ~1.5–2% Σy. Подробно — `data-anomalies.md`, раздел 0.
 
-**Открытая задача:** найти точную дату окончания работ в постах Дептранса за ноябрь.
+**Дата окончания найдена:** с 15.11.2025 движение по выходным восстановлено — https://t.me/DtOperativno/23565 (подробно — `data-anomalies.md`, раздел 0).
 
 ## 6. Строительство и открытие новых маршрутов — `найден, не оценён`
 
@@ -111,3 +111,38 @@
 
 **Открытая задача:** выяснить, что именно изменилось у маршрутов 7, 11, 12
 20.12.2025, и оценить эффект на последние 12 дней горизонта.
+
+---
+
+## Статус в модели (26.09.2026, ячейка «Эффект внешних источников» в ноутбуке)
+
+Полная таблица с ссылками и замерами — `docs/criteria-checklist.md`, критерий 2а.
+
+| Категория ТЗ | Источник | В прогнозе | Эффект |
+|---|---|---|---|
+| Календарь | xmlcalendar + каникулы | да | +3.7 п.п. на фолде с праздниками |
+| Погода | Open-Meteo, архив прогнозов (≤ 7 дней) | да | дождь при t ≥ 10 °C: −1.8%/мм; прогноз на день вперёд +0.64 п.п. (фев–окт), летом до +3 |
+| Прочие: ремонты/режимы | Telegram Дептранса, newsvostok | да | лидерборд 0.880 → 0.890 |
+| Прочие: оперативные сбои | @DtOperativno, `parse_deptrans_tg.py incidents` → `tram_incidents_2025.csv` | да | −16% посадок в 3 часа после сбоя; на этих часах 0.769 → 0.824 |
+| Трафик | баллы ЦОДД (@DtOperativno), онлайн Яндекс | **нет** | свободные дороги −2.4%, но прогноз ухудшается — в сервисе как ручка |
+
+## В сервисе: схема `external.*`
+
+Снимок источников из `mostrans_handoff/mostrans/external_data/` при старте бэкенда грузится в отдельную схему
+`external` (`ingest/ExternalDataService`); каждая строка несёт `source`, `source_url`, `fetched_at`,
+каждая загрузка — запись в `external.fetch_log` (статус, число строк, ошибка). С данными организаторов
+не смешивается: соединение с прогнозом — только на выдаче.
+
+| Таблица | Источник (`source`) | Файл снимка | Ссылка |
+|---|---|---|---|
+| `external.calendar_day` | `xmlcalendar` | `calendar_2025.csv` | https://github.com/xmlcalendar/data |
+| `external.weather_hourly`, `kind = forecast` | `open-meteo-forecast` | `weather_fcst_hourly_2025.csv` | https://open-meteo.com/en/docs/historical-forecast-api |
+| `external.weather_hourly`, `kind = fact` | `open-meteo-fact` | `weather_fact_hourly_2025.csv` | https://open-meteo.com/en/docs/historical-weather-api |
+| `external.event` | `telegram-dtroad`, `telegram-dtoperativno` | `events_2025.csv`, `DtOperativno_events_2025.csv` (только трамвайные посты) | ссылка на пост в каждой строке |
+| `external.event`, `category = tram_incident` | `telegram-incidents` | `tram_incidents_2025.csv` | ссылка на пост в каждой строке |
+| `external.traffic_score` | `codd-telegram` | `DtOperativno_traffic_scores_2025.csv`, `traffic_scores_2025.csv` | ссылка на пост в каждой строке |
+| `external.traffic_score` | `yandex-traffic` — **онлайн**, фоном раз в 10 мин, таймаут 2 с | — | https://export.yandex.ru/bar/reginfo.xml?region=213 |
+
+Что видно снаружи: `GET /api/external` — источники со ссылками, время и статус загрузки, последний балл пробок;
+`GET /api/external?date=` и блок «Внешние факторы суток» на главном экране — календарь, прогноз погоды и посты
+Дептранса на выбранную дату. Источник недоступен → строка `failed` в журнале, коэффициент = 1, прогноз базовый.

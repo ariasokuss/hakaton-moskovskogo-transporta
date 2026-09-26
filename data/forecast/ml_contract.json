@@ -1,0 +1,76 @@
+{
+ "model_version": "20260926_1142",
+ "models": [
+  "lgbm_h3_s42.txt",
+  "lgbm_h3_s43.txt",
+  "lgbm_h3_s44.txt",
+  "lgbm_h14_s42.txt",
+  "lgbm_h14_s43.txt",
+  "lgbm_h14_s44.txt",
+  "lgbm_h28_s42.txt",
+  "lgbm_h28_s43.txt",
+  "lgbm_h28_s44.txt"
+ ],
+ "seeds": [
+  42,
+  43,
+  44
+ ],
+ "features": [
+  "route",
+  "hour",
+  "dow",
+  "ptype",
+  "is_holiday",
+  "is_short_workday",
+  "is_working_weekend",
+  "is_day_off",
+  "pre_new_year_week",
+  "days_to_ny",
+  "lvl_wd5",
+  "lvl_wd10",
+  "lvl_wd20",
+  "lag_w1",
+  "lag_m4",
+  "in_regime"
+ ],
+ "categorical": {
+  "route": [
+   1,
+   7,
+   11,
+   12,
+   17,
+   25,
+   26,
+   28,
+   50
+  ]
+ },
+ "target": "boardings / prof (профиль модели 1), вес prof; прогноз = prof × clip(mean(models), 0.3, 2.0)",
+ "anchor_level": true,
+ "blend": "pred = 0.2·prof + 0.8·ML",
+ "profile_config": {
+  "n_weeks": 16,
+  "level_weeks": 3,
+  "agg": "median",
+  "exclude_summer": true,
+  "drop_anomalies": false
+ },
+ "origins_step_days": 3,
+ "train_horizons_days": [
+  3,
+  14,
+  28
+ ],
+ "tech_hours_zero": [
+  2,
+  3
+ ],
+ "versions": {
+  "lightgbm": "4.6.0",
+  "pandas": "2.2.3",
+  "numpy": "2.1.3",
+  "python": "3.13.15"
+ }
+}

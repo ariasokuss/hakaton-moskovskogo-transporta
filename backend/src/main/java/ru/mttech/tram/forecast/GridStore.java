@@ -121,32 +121,64 @@ public class GridStore {
         return out;
     }
 
+    /** Одноимённые дни старше этого срока от конца истории приводятся к текущему уровню. */
+    private static final int STALE_DAYS = 28;
+
     /**
      * «Обычный уровень» для сравнения: медиана по последним {@value #BASELINE_WEEKS}
      * одноимённым дням недели, НЕ попавшим под режим с exclude_from_training.
      * Так у маршрута 50 базовые выходные берутся до начала ремонта, а не нули.
+     *
+     * Если эти дни старые (режим выбил последние недели, как выходные 7/50 в сен–окт),
+     * они взяты из другого сезона — например, из лета, когда уровень на 15–20% ниже.
+     * Тогда медиана умножается на отношение уровня будней «сейчас / в период выбранных дней»:
+     * иначе после окончания ремонта обычные выходные выглядели бы превышением на +25–47%.
      */
-    private double[][][] computeBaseline(List<Route> routes, NavigableMap<LocalDate, int[][]> actuals,
-                                         List<Regime> regimes) {
+    static double[][][] computeBaseline(List<Route> routes, NavigableMap<LocalDate, int[][]> actuals,
+                                        List<Regime> regimes) {
         double[][][] b = new double[routes.size()][7][24];
+        if (actuals.isEmpty()) return b;
+        LocalDate last = actuals.lastKey();
         for (int ri = 0; ri < routes.size(); ri++) {
             int routeId = routes.get(ri).id();
+            double weekdayNow = weekdayLevel(ri, routeId, actuals, regimes, last.minusDays(STALE_DAYS - 1), last);
             for (int dow = 0; dow < 7; dow++) {
                 List<int[]> picked = new ArrayList<>();
+                LocalDate newest = null, oldest = null;
                 for (LocalDate d : actuals.descendingKeySet()) {
                     if (d.getDayOfWeek().getValue() - 1 != dow) continue;
                     if (isExcluded(routeId, d, regimes)) continue;
                     picked.add(actuals.get(d)[ri]);
+                    if (newest == null) newest = d;
+                    oldest = d;
                     if (picked.size() == BASELINE_WEEKS) break;
+                }
+                double level = 1.0;
+                if (newest != null && newest.isBefore(last.minusDays(STALE_DAYS))) {
+                    double weekdayThen = weekdayLevel(ri, routeId, actuals, regimes, oldest, newest);
+                    if (weekdayNow > 0 && weekdayThen > 0) level = weekdayNow / weekdayThen;
                 }
                 for (int h = 0; h < 24; h++) {
                     double[] v = new double[picked.size()];
                     for (int k = 0; k < v.length; k++) v[k] = picked.get(k)[h];
-                    b[ri][dow][h] = median(v);
+                    b[ri][dow][h] = median(v) * level;
                 }
             }
         }
         return b;
+    }
+
+    /** Медиана суточных посадок маршрута по будням (пн–пт, вне режимов) в интервале [from, to]. */
+    private static double weekdayLevel(int ri, int routeId, NavigableMap<LocalDate, int[][]> actuals,
+                                       List<Regime> regimes, LocalDate from, LocalDate to) {
+        List<Double> days = new ArrayList<>();
+        for (var e : actuals.subMap(from, true, to, true).entrySet()) {
+            if (e.getKey().getDayOfWeek().getValue() > 5 || isExcluded(routeId, e.getKey(), regimes)) continue;
+            int total = 0;
+            for (int h = 0; h < 24; h++) total += e.getValue()[ri][h];
+            days.add((double) total);
+        }
+        return median(days.stream().mapToDouble(Double::doubleValue).toArray());
     }
 
     /**

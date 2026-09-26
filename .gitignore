@@ -28,6 +28,7 @@ out/
 node_modules/
 dist/
 .vite/
+*.tsbuildinfo
 *.local
 
 # Python
@@ -54,3 +55,11 @@ venv/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ---------------------------------------------------------------------------
+# ML-контур (ветка shotme)
+# ---------------------------------------------------------------------------
+# датасет в папке ML-части (берётся с Kaggle: shotme/moscow-transport)
+mostrans_handoff/mostrans/dataset/
+# чекпоинты ноутбука (веса моделей, промежуточные расчёты) — живут на Google Drive
+checkpoints/

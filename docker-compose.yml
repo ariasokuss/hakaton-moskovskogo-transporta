@@ -48,10 +48,11 @@ services:
       SPRING_FLYWAY_URL: jdbc:postgresql://postgres:5432/tram
       SPRING_FLYWAY_USER: tram
       SPRING_FLYWAY_PASSWORD: tram
-      # Внешние источники: сеть НЕ в критическом пути. Сервис поднимается
-      # на снимке из БД, живое обновление идёт фоном и может не сработать.
+      # Внешние источники: сеть НЕ в критическом пути. Снимок источников
+      # (external_data/, со ссылками) грузится в схему external без сети;
+      # онлайн-балл пробок Яндекса обновляется фоном раз в 10 минут с таймаутом 2 с.
       APP_EXTERNAL_ENABLED: "true"
-      APP_EXTERNAL_TIMEOUT_MS: "2000"
+      APP_EXTERNAL_TIMEOUT: "2s"
       JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75 -XX:+UseZGC"
     volumes:
       # Датасет организаторов в git не лежит — монтируется read-only.
@@ -63,6 +64,8 @@ services:
       - ./data/geo:/data/geo:ro
       # Нагрузка с пересадками, агрегат сырых валидаций (tools/build_load.sh).
       - ./data/load:/data/load:ro
+      # Снимок внешних источников ML-команды (календарь, погода, посты Дептранса, пробки).
+      - ./mostrans_handoff/mostrans/external_data:/data/external:ro
     ports:
       - "8080:8080"
     healthcheck:
