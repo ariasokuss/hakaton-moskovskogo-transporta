@@ -10,6 +10,17 @@
 > Этот файл — единая точка входа в проект. Правила и архитектурные решения
 > зафиксированы в [CLAUDE.md](CLAUDE.md), подробности — в [`docs/`](docs/).
 
+## Быстрый запуск
+
+Полный runbook находится в [DOCKER.md](DOCKER.md). Для чистого Docker-запуска:
+
+```powershell
+docker compose down -v
+docker compose up -d --build
+powershell -ExecutionPolicy Bypass -File perf/smoke_test.ps1
+```
+
+Для локального ML-пайплайна Python-зависимости перечислены в [requirements.txt](requirements.txt). В продакшен-образы Python не устанавливается: backend и frontend собираются из собственных Dockerfile.
 ## Для жюри — за одну минуту
 
 ```bash
@@ -580,3 +591,4 @@ curl "http://localhost:8080/api/forecast?route=17&horizon=month&date=2025-11-15"
 | [ml/README.md](ml/README.md), [ML_README.md](mostrans_handoff/mostrans/ML_README.md) | ML-модель: запуск, параметры, артефакты |
 | [perf/README.md](perf/README.md) | методика и результаты нагрузочного теста |
 | `EXTERNAL_DATA.md`, `ML_IDEAS.md` | материалы ML-команды |
+

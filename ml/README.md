@@ -25,5 +25,6 @@ models = [lgb.Booster(model_file=f"ml/artifacts/{m}") for m in c["models"]]
 ```
 
 Сервис модель не вызывает: прогноз предрассчитан ноутбуком и импортируется как прогон
-(`tools/sync_ml_artifacts.sh <service_artifacts.zip>` → `docker compose restart backend`).
+(`tools/sync_ml_artifacts.sh <service_artifacts.zip>` → `docker compose restart backend`). Архив создаётся ноутбуком вне Git; в репозитории уже лежат распакованные финальные артефакты.
 Контракт между контурами — `ml_contract.json` и формат `route;date;hour;pred;model_version`.
+
