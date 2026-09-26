@@ -49,12 +49,17 @@ KAGGLE_FULL_DOWNLOAD = False                           #@param {type:"boolean"}
 DRIVE_DATA_DIR = "/content/drive/MyDrive/mostrans"     #@param {type:"string"}
 
 SEED = 42
+TECH_HOURS = (2, 3)   # технические валидации (проверка валидаторов, 0.002% объёма) — не используются в профиле, прогноз 0
 ROUTES = [1, 5, 7, 11, 12, 17, 25, 26, 28, 50]
 FORECAST_START, FORECAST_END = "2025-11-01", "2025-12-31"
 
 # Погода на горизонте прогноза. Решение проверяют в ПОТОКОВОМ режиме: в момент прогноза будущей погоды нет.
 # "fcst" — архив прогнозов Open-Meteo, и только на первые WEATHER_HORIZON_DAYS дней горизонта (дальше K=1, нейтрально).
 # "fact" — фактическая погода: утечка из будущего, только для анализа, НЕ для сабмита.
+# --- чекпоинты: долгие шаги и веса моделей сохраняются на Drive (MyDrive/mostrans/checkpoints/) и при повторном
+#     запуске загружаются. Ключ — хеш кода ноутбука, данных и настроек: изменили что-то — шаг пересчитается сам.
+USE_CHECKPOINTS = True                                 #@param {type:"boolean"}
+CODE_HASH = "__CODE_HASH__"                            # подставляется при сборке ноутбука из tools/build_nb.py
 WEATHER_FOR_FORECAST = "fcst"                          #@param ["fcst", "fact"]
 # Трафик (баллы ЦОДД): эффект измерен в ячейке «Эффект внешних источников» — в потоковой проверке прогноз НЕ улучшает,
 # поэтому в сабмит по умолчанию не входит; включить — True
@@ -104,6 +109,11 @@ def known_regimes(cutoff):
             end = "2100-01-01"                            # срок неизвестен — режим продолжается
         out.append({**rg, "start": pd.Timestamp(rg["start"]), "end": pd.Timestamp(end)})
     return out
+
+# снимок настроек — часть ключа чекпоинтов (пути и флаги скачивания на результат не влияют)
+CONFIG_SNAPSHOT = {k: v for k, v in dict(globals()).items()
+                   if k.isupper() and isinstance(v, (bool, int, float, str, tuple, list, dict))
+                   and k not in ("KAGGLE_DATASET", "KAGGLE_FULL_DOWNLOAD", "DRIVE_DATA_DIR", "USE_CHECKPOINTS", "CODE_HASH")}
 """)
 
 code(r"""
@@ -114,7 +124,7 @@ warnings.filterwarnings("ignore")
 
 IN_COLAB = "google.colab" in sys.modules
 if IN_COLAB:
-    subprocess.run([sys.executable, "-m", "pip", "-q", "install", "lightgbm>=4.3", "kagglehub", "tqdm", "duckdb"], check=False)
+    subprocess.run([sys.executable, "-m", "pip", "-q", "install", "lightgbm==4.6.0", "kagglehub", "tqdm", "duckdb"], check=False)
 
 import numpy as np
 import pandas as pd
@@ -327,6 +337,26 @@ md("""
 
 code(r"""
 #@title Функции: метрика, типы дней, признаки
+import hashlib
+CKPT_DIR = PROJECT_DIR / "checkpoints"
+def _h(obj):
+    return hashlib.sha1(repr(obj).encode("utf-8")).hexdigest()[:16]
+DATA_HASH = hashlib.sha1(b"".join(pd.util.hash_pandas_object(x, index=False).values.tobytes()
+                                  for x in [df, traffic.astype(str), incidents.astype(str), w_fcst, w_fact, cal.astype(str)])).hexdigest()[:16]
+
+def cached(name, parts, fn):
+    # результат шага fn() сохраняется на диск; при том же коде, данных, настройках и parts — загружается
+    path = CKPT_DIR / f"{name}_{_h((CODE_HASH, DATA_HASH, CONFIG_SNAPSHOT, parts))}.pkl"
+    if USE_CHECKPOINTS and path.exists():
+        print(f"⏩ чекпоинт {path.name}: загружено с диска, пересчёт пропущен")
+        return pd.read_pickle(path)
+    res = fn()
+    if USE_CHECKPOINTS:
+        CKPT_DIR.mkdir(parents=True, exist_ok=True)
+        pd.to_pickle(res, path)
+        print(f"💾 чекпоинт сохранён: {path.name}")
+    return res
+
 def wape_score(y, p):
     y = np.asarray(y, float); p = np.asarray(p, float)
     return max(0.0, 1 - np.abs(y - p).sum() / y.sum())
@@ -340,10 +370,16 @@ def ptype_of(dates, use_calendar=True):
         pt = np.where(c.is_working_weekend == 1, "mon_thu", pt)
     return pd.Series(pt, index=dates)
 
+WARM_TEMP = 10.0      # °C: дождь в тёплую погоду отменяет необязательные поездки; в холод эффекта нет (замер ниже)
+WEATHER_RIDGE = 50.0  # регуляризация коэффициента погоды
 def daily_weather(w):
     g = w.groupby("date")
-    return pd.DataFrame({"temp": g.temperature_2m.mean(), "precip": g.precipitation.sum(),
-                         "snow": g.snowfall.sum(), "snow_depth": g.snow_depth.mean()})
+    d = pd.DataFrame({"temp": g.temperature_2m.mean(), "precip": g.precipitation.sum(),
+                      "snow": g.snowfall.sum(), "snow_depth": g.snow_depth.mean(),
+                      "precip_day": w[w.hour.between(6, 21)].groupby("date").precipitation.sum()})
+    d["precip_warm"] = d.precip_day.fillna(0) * (d.temp >= WARM_TEMP)
+    return d
+DAY_RESID = None      # остатки прогноза на день вперёд — считаются ниже, до этого погода нейтральна
 WD_FACT, WD_FCST = daily_weather(w_fact), daily_weather(w_fcst)
 WD_FUT = WD_FACT if WEATHER_FOR_FORECAST == "fact" else WD_FCST   # погода, подаваемая в прогноз (и в валидацию)
 
@@ -396,6 +432,7 @@ class ProfileModel:
         if self.drop_anomalies:                             # разметка только по данным до отсечки
             aset = find_anomalies(data, cutoff)
             tr = tr[[(r, d) not in aset for r, d in zip(tr.route, tr.date)]]
+        tr = tr[~tr.hour.isin(TECH_HOURS)]                   # технические часы не входят в форму суток и уровень
         tr["ptype"] = ptype_of(pd.DatetimeIndex(tr.date)).values
         shape = tr[tr.date.isin(days)].groupby(["route", "ptype", "hour"]).boardings.agg(self.agg)
         shape = shape / shape.groupby(level=["route", "ptype"]).transform("sum")
@@ -410,19 +447,16 @@ class ProfileModel:
         if self.use_calendar:
             self.K_holiday = self._k(hist, CAL.index[(CAL.is_holiday == 1) & (CAL.index <= cutoff)], default=0.82)
             self.K_short = self._k(hist, CAL.index[(CAL.is_short_workday == 1) & (CAL.dow < 5) & (CAL.index <= cutoff)], default=1.0)
-        # --- K по погоде: OLS на будних днях обучающего окна (факт погоды)
-        self.beta = np.zeros(3); self.w_mu = WD_FACT.loc[days, ["temp", "precip", "snow"]].mean()
-        if self.use_weather:
-            wd = [d for d in days if CAL.loc[d, "dow"] < 5]
-            y = hist[hist.date.isin(wd)].groupby("date").boardings.sum()
-            p = self._raw(pd.DatetimeIndex(wd)).groupby("date").pred.sum()
-            X = WD_FACT.loc[wd, ["temp", "precip", "snow"]] - self.w_mu
-            yy = np.log((y / p).clip(0.5, 1.5)).loc[wd]
-            A = np.c_[np.ones(len(X)), X.values]
-            coef = np.linalg.lstsq(A, yy.values, rcond=None)[0]
-            self.beta = np.clip(coef[1:], -0.02, 0.02)   # не более ±2%/ед.: защита от переобучения
-            # признак без вариации в окне (снег в сен–окт) не оценить — коэффициент 0, а не мусор на границе клипа
-            self.beta[((WD_FACT.loc[wd, ["temp", "precip", "snow"]].abs() > 0.1).sum() < 5).values] = 0.0
+        # --- K по погоде: дождь днём при t ≥ WARM_TEMP. Коэффициент — по остаткам прогноза на день вперёд
+        #     (DAY_RESID: факт / прогноз без погоды, модель видела только прошлое), только дни до отсечки.
+        #     Абсолютная температура не используется: она кодирует сезон, а не погоду (проверено — ухудшало прогноз)
+        self.beta = np.zeros(1)
+        if self.use_weather and DAY_RESID is not None:
+            r = DAY_RESID[DAY_RESID.index <= cutoff]
+            if len(r) >= 30:
+                x = WD_FUT.precip_warm.reindex(r.index).fillna(0).values
+                b = float(x @ (r.values - r.mean()) / (x @ x + WEATHER_RIDGE))
+                self.beta = np.array([np.clip(b, -0.03, 0.0)])   # знак из физики: дождь посадки не добавляет
         # --- K по сбоям: посадки / профиль в часы после поста о сбое на маршруте (только посты до отсечки)
         self.K_incident = 1.0
         if self.use_incidents and len(INC_CELLS):
@@ -496,11 +530,11 @@ class ProfileModel:
             k = np.where(c.is_holiday.values == 1, self.K_holiday, k)
             k = np.where((c.is_short_workday.values == 1) & (c.dow.values < 5), k * self.K_short, k)
             k = np.where(c.is_working_weekend.values == 1, k * K_WORKING_SATURDAY, k)
-        if self.use_weather and weather is not None:
-            X = weather.reindex(g.date)[["temp", "precip", "snow"]].fillna(self.w_mu) - self.w_mu
+        if self.use_weather and weather is not None and self.beta[0] != 0:
+            x = weather.reindex(g.date).precip_warm.fillna(0).values.copy()
             # дальше горизонта прогноза погоды — нейтрально (в момент прогноза этих данных нет)
-            X[(g.date > self.cutoff + pd.Timedelta(days=WEATHER_HORIZON_DAYS)).values] = 0.0
-            k = k * np.exp(np.clip(X.values @ self.beta, -0.1, 0.1))
+            x[(g.date > self.cutoff + pd.Timedelta(days=WEATHER_HORIZON_DAYS)).values] = 0.0
+            k = k * np.exp(np.clip(x * self.beta[0], -0.15, 0.0))
         if self.use_incidents and self.K_incident < 1.0:
             # сбои, известные на момент прогноза (EVENTS_MODE: "all" — все посты, "strict" — до отсечки)
             ic = INC_CELLS if EVENTS_MODE == "all" else INC_CELLS[INC_CELLS.date <= self.cutoff]
@@ -544,18 +578,60 @@ print(f"  mean = {r0['mean']:.4f}")
 """)
 
 code(r"""
+#@title Погода (критерий 2а): остатки прогноза на день вперёд и измеренный эффект дождя, фев–окт
+# Каждый день модель без погоды обучается на данных «до вчера» и прогнозирует сегодня; остаток дня = log(факт / прогноз).
+# Коэффициент дождя на день t обучается только на остатках дней < t (расширяющееся окно) — так же, как в проде.
+RESID_CFG = dict(n_weeks=16, level_weeks=3, agg="median", exclude_summer=True)
+def _p1d():
+    rows = []
+    for cut in tqdm(pd.date_range("2025-01-12", "2025-10-30", freq="D"), desc="прогноз на день вперёд"):
+        d = cut + pd.Timedelta(days=1)
+        m = ProfileModel(**RESID_CFG, use_weather=False).fit(df[df.date <= cut], cut)
+        rows.append(df[df.date == d].merge(m.predict([d]), on=["route", "date", "hour"]))
+    return pd.concat(rows, ignore_index=True)
+P1D = cached("day_ahead_resid", (RESID_CFG,), _p1d)
+dd = P1D.groupby("date").agg(y=("boardings", "sum"), p=("pred", "sum"))
+c1 = CAL.reindex(dd.index)
+ok = ((c1.is_day_off == 0) & (c1.is_short_workday == 0)).values & (dd.p > 0).values
+DAY_RESID = np.log(dd.y[ok] / dd.p[ok])
+
+K_W = pd.Series(1.0, index=dd.index)
+x_all = WD_FUT.precip_warm.reindex(dd.index).fillna(0)
+for t in dd.index:
+    r = DAY_RESID[DAY_RESID.index < t]
+    if len(r) < 30:
+        continue
+    x = x_all.reindex(r.index).values
+    b = float(np.clip(x @ (r.values - r.mean()) / (x @ x + WEATHER_RIDGE), -0.03, 0.0))
+    K_W[t] = float(np.exp(np.clip(x_all[t] * b, -0.15, 0.0)))
+q = P1D.merge(K_W.rename("K"), left_on="date", right_index=True)
+def d_pp(s): return 100 * (wape_score(s.boardings, s.pred * s.K) - wape_score(s.boardings, s.pred))
+WEATHER_EFFECT = {name: d_pp(q[q.date.between(a, b_)]) for name, a, b_ in
+                  [("фев–окт", "2025-02-01", "2025-10-31"), ("фев–мар", "2025-02-01", "2025-03-31"),
+                   ("апр–авг", "2025-04-01", "2025-08-31"), ("сен–окт", "2025-09-01", "2025-10-31")]}
+print("Эффект погоды (дождь при t ≥ %.0f °C) на прогноз на день вперёд, п.п. WAPE-score:" % WARM_TEMP)
+print(pd.Series(WEATHER_EFFECT).round(3).to_string())
+print("по месяцам:", {m: round(d_pp(g_), 3) for m, g_ in q.groupby(q.date.dt.month)})
+x = x_all.reindex(DAY_RESID.index).values
+print(f"коэффициент на 31.10: {np.clip(x @ (DAY_RESID.values - DAY_RESID.mean()) / (x @ x + WEATHER_RIDGE), -0.03, 0):.4f} "
+      "на мм осадков за день (6–21 ч)")
+""")
+
+code(r"""
 #@title Подбор гиперпараметров профиля (прогресс-бар + метрика по ходу)
 import itertools
 # n_weeks — окно формы суток, level_weeks — окно уровня
 space = list(itertools.product([8, 12, 16], [2, 3, 4], ["median", "mean"], [True], [False, True]))
-rows = []
-pbar = tqdm(space, desc="grid")
-for n, lw, agg, es, da in pbar:
-    r = evaluate(lambda: ProfileModel(n, agg, es, use_weather=False, use_calendar=True, level_weeks=lw, drop_anomalies=da))
-    rows.append({"n_weeks": n, "level_weeks": lw, "agg": agg, "exclude_summer": es, "drop_anomalies": da, **r})
-    best = max(rows, key=lambda x: x["mean"])
-    pbar.set_postfix(best=f"{best['mean']:.4f}", cur=f"{r['mean']:.4f}")
-grid_res = pd.DataFrame(rows).sort_values("mean", ascending=False)
+def _grid():
+    rows = []
+    pbar = tqdm(space, desc="grid")
+    for n, lw, agg, es, da in pbar:
+        r = evaluate(lambda: ProfileModel(n, agg, es, use_weather=False, use_calendar=True, level_weeks=lw, drop_anomalies=da))
+        rows.append({"n_weeks": n, "level_weeks": lw, "agg": agg, "exclude_summer": es, "drop_anomalies": da, **r})
+        best = max(rows, key=lambda x: x["mean"])
+        pbar.set_postfix(best=f"{best['mean']:.4f}", cur=f"{r['mean']:.4f}")
+    return pd.DataFrame(rows)
+grid_res = cached("profile_grid", (space,), _grid).sort_values("mean", ascending=False)
 print(grid_res.head(10).round(4).to_string(index=False))
 BEST = grid_res.iloc[0][["n_weeks", "level_weeks", "agg", "exclude_summer", "drop_anomalies"]].to_dict()
 BEST["n_weeks"] = int(BEST["n_weeks"]); BEST["level_weeks"] = int(BEST["level_weeks"]); BEST["exclude_summer"] = bool(BEST["exclude_summer"]); BEST["drop_anomalies"] = bool(BEST["drop_anomalies"])
@@ -572,20 +648,22 @@ for name, kw in tqdm([("profile only", dict(use_weather=False, use_calendar=Fals
 abl = pd.DataFrame(abl).T.round(4)
 print(abl.to_string())
 m_tmp = ProfileModel(**BEST).fit(df, "2025-10-31")
-print(f"\nK_holiday={m_tmp.K_holiday:.3f}  K_short={m_tmp.K_short:.3f}  beta_weather(temp,precip,snow)={np.round(m_tmp.beta, 4)}")
+print(f"\nK_holiday={m_tmp.K_holiday:.3f}  K_short={m_tmp.K_short:.3f}  beta_дождь_в_тепло={np.round(m_tmp.beta, 4)}")
 """)
 
 code(r"""
 #@title Эффект внешних источников (критерий 2а): потоковый режим, прогноз на 1 день вперёд, сен–окт
 # каждый день: модель обучается на данных «до вчера» и прогнозирует сегодняшний день; источник выключается по одному
 ABL_CUTOFFS = pd.date_range("2025-09-01", "2025-10-30", freq="D")
-def stream_1d(**kw):
+def _stream_1d(**kw):
     out = []
     for cut in ABL_CUTOFFS:
         d = cut + pd.Timedelta(days=1)
         m = ProfileModel(**{**BEST, **kw}).fit(df[df.date <= cut], cut)
         out.append(df[df.date == d].merge(m.predict([d], weather=WD_FUT), on=["route", "date", "hour"]))
     return pd.concat(out, ignore_index=True)
+def stream_1d(**kw):
+    return cached("stream_1d", (BEST, sorted(kw.items()), str(ABL_CUTOFFS[0]), len(ABL_CUTOFFS)), lambda: _stream_1d(**kw))
 
 SOURCES = [("календарь (xmlcalendar, каникулы)", "use_calendar"), ("погода (Open-Meteo, архив прогнозов)", "use_weather"),
            ("ремонты и режимы маршрутов (Telegram Дептранса, newsvostok)", "use_regimes"),
@@ -634,7 +712,15 @@ md("""
   прогноз модели 1 (профиля) как базовая линия.
 * **Цель** — отношение `факт / профиль` с весом `профиль`. L1 на таком отношении — это ровно WAPE по посадкам.
 * Летние недели (отпуска, закрытие участков) из целей исключены: на ноябрь–декабрь эта динамика не переносится.
-* **Ансамбль** модели 1 и модели 2 — вес подбирается по фолдам.
+* **Девять LightGBM**: три горизонта обучения (цели на 1–3, 1–14 и 1–28 дней вперёд) × три seed, прогноз — среднее девяти.
+  Усреднение по seed гасит случайность отдельного обучения — скор перезапуска стабильнее.
+  Модель, обученная на всех 61 днях, выучивает сезонный дрейф января–августа и переносит его на осень: на фолдах
+  ML отдельно 0.887; на коротких горизонтах — 0.891 (≤14) … 0.8922 (ансамбль трёх). Признаки фиксируются в точке прогноза,
+  поэтому модель применяется к любому дню горизонта (прямой прогноз).
+* **Итоговый прогноз — ML с весом ≥ 80%** (`ML_MIN_WEIGHT`), профиль — 20% как опорная линия; вес внутри допустимого диапазона — по CV.
+* **Привязка уровня** (`ML_ANCHOR_LEVEL`): суммарный объём маршрута на горизонте берётся от профиля, ML распределяет его по дням и часам.
+  Без привязки уровень ML на 61 день нестабилен: в одном из прогонов −3.5% к профилю, лидерборд 0.87 вместо 0.89.
+  С привязкой на фолдах: профиль 0.8935, 80% ML — 0.8935, 100% ML — 0.892.
 """)
 
 code(r"""
@@ -642,6 +728,13 @@ code(r"""
 ORIGIN_STEP_DAYS = 3                                   #@param {type:"integer"}
 # шаг точек прогноза в истории: 3 → ~90 точек, ~1.3 млн примеров (7 → 39 точек, ~570 тыс.; быстрее в 2 раза)
 ML_ROUNDS = 500
+ML_HORIZONS = (3, 14, 28)                              # горизонты обучения LightGBM (дней вперёд)
+ML_SEEDS = (42, 43, 44)                                # на каждый горизонт — 3 модели с разными seed, прогноз — среднее 9 моделей
+ML_MIN_WEIGHT = 0.8                                    #@param {type:"number"}
+ML_ANCHOR_LEVEL = True                                 #@param {type:"boolean"}
+# True: суммарный объём маршрута на горизонте задаёт профиль, распределение по дням и часам — ML.
+# На горизонте 61 день уровень у LightGBM нестабилен (в прогоне 26.09 −3.5% к профилю → лидерборд 0.87)
+# минимальная доля ML в итоговом прогнозе: 0.8 → вес выбирается по CV из 0.8/0.9/1.0; 1.0 → только ML
 ML_FEATS = ["route", "hour", "dow", "ptype", "is_holiday", "is_short_workday", "is_working_weekend", "is_day_off",
             "pre_new_year_week", "days_to_ny", "lvl_wd5", "lvl_wd10", "lvl_wd20", "lag_w1", "lag_m4", "in_regime"]
 ML_PARAMS = dict(objective="l1", learning_rate=0.03, num_leaves=63, min_data_in_leaf=200, feature_fraction=0.8,
@@ -680,6 +773,7 @@ def origin_frame(data, t, end, piv):
     f["lag_m4"] = np.nanmean(np.vstack([lag(k) for k in range(4)]), axis=0)
     for col in ["lag_w1", "lag_m4"]:
         f[col] = f[col] / f.prof.clip(lower=1)
+    f["h"] = (f.date - t).dt.days                                   # горизонт (не признак — для отбора целей)
     f["in_regime"] = 0
     for rg in pm.regimes:
         f.loc[f.route.isin(rg["routes"]) & f.date.between(rg["start"], rg["end"]) & (f.ptype >= 2), "in_regime"] = 1
@@ -688,26 +782,55 @@ def origin_frame(data, t, end, piv):
 ORIGINS = pd.date_range("2025-02-01", "2025-10-30", freq=f"{ORIGIN_STEP_DAYS}D")
 
 def build_train(data, cutoff, cache=None, piv=None):
-    # обучающая выборка на отсечку: точки прогноза < cutoff, цели <= cutoff, без летних недель
+    # обучающая выборка на отсечку: точки прогноза < cutoff, цели <= cutoff и на горизонте <= max(ML_HORIZONS), без летних недель
     cutoff = pd.Timestamp(cutoff)
     parts = []
     for o in ORIGINS[ORIGINS < cutoff]:
         fr = cache[o] if cache is not None else origin_frame(data, o, o + pd.Timedelta(days=61), piv)[0]
-        parts.append(fr[(fr.date <= cutoff) & ~fr.date.isin(SUMMER_DAYS)])
+        parts.append(fr[(fr.date <= cutoff) & ~fr.date.isin(SUMMER_DAYS) & (fr.h <= max(ML_HORIZONS))])
     tr = pd.concat(parts).merge(data[["route", "date", "hour", "boardings"]], on=["route", "date", "hour"])
     return tr[tr.prof > 1]
 
-def fit_ml(tr):
+def _tr_hash(tr):
+    return hashlib.sha1(pd.util.hash_pandas_object(tr[ML_FEATS + ["boardings", "prof"]], index=False).values.tobytes()).hexdigest()[:16]
+
+def fit_ml(tr, seed=SEED):
+    # веса модели — чекпоинт на диске; ключ — содержимое обучающей выборки, seed, параметры и версия LightGBM
+    params = {**ML_PARAMS, "seed": seed}
+    key = _h((_tr_hash(tr), seed, ML_ROUNDS, ML_FEATS, {k: v for k, v in params.items() if k != "num_threads"}, lgb.__version__))
+    path = CKPT_DIR / "lgbm" / f"lgbm_{key}.txt"
+    if USE_CHECKPOINTS and path.exists():
+        return lgb.Booster(model_file=str(path))
     X = tr[ML_FEATS].copy(); X["route"] = X.route.astype(ROUTE_DTYPE)
-    return lgb.train(ML_PARAMS, lgb.Dataset(X, (tr.boardings / tr.prof).clip(0, 3), weight=tr.prof), ML_ROUNDS)
+    m = lgb.train(params, lgb.Dataset(X, (tr.boardings / tr.prof).clip(0, 3), weight=tr.prof), ML_ROUNDS)
+    if USE_CHECKPOINTS:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        m.save_model(str(path))
+    return m
 
 def predict_ml(model, fr):
     X = fr[ML_FEATS].copy(); X["route"] = X.route.astype(ROUTE_DTYPE)
     return np.where(fr.prof.values > 1, fr.prof.values * np.clip(model.predict(X), 0.3, 2.0), fr.prof.values)
 
+def fit_ml_ensemble(tr):
+    # горизонт обучения × seed: 3 × 3 = 9 моделей; усреднение гасит случайность отдельного обучения
+    return [fit_ml(tr[tr.h <= hm], sd) for hm in ML_HORIZONS for sd in ML_SEEDS]
+
+def predict_ml_ensemble(models, fr):
+    return np.mean([predict_ml(m, fr) for m in models], axis=0)
+
+def anchor_level(fr, ml):
+    # уровень маршрута на всём горизонте — от профиля; распределение по дням и часам — от ML
+    if not ML_ANCHOR_LEVEL:
+        return ml
+    s = pd.Series(ml, index=fr.index)
+    k = fr.groupby("route").prof.transform("sum") / s.groupby(fr.route.values).transform("sum").replace(0, np.nan)
+    return (s * k).fillna(0).values
+
 PIV_ALL = make_pivots(df)
 # точки прогноза считаются один раз: каждая использует только данные до себя (это проверяет тест на утечку ниже)
-ORIGIN_CACHE = {o: origin_frame(df, o, o + pd.Timedelta(days=61), PIV_ALL)[0] for o in tqdm(ORIGINS, desc="точки прогноза")}
+ORIGIN_CACHE = cached("origin_frames", (BEST, ORIGIN_STEP_DAYS, str(ORIGINS[0]), len(ORIGINS)),
+                      lambda: {o: origin_frame(df, o, o + pd.Timedelta(days=61), PIV_ALL)[0] for o in tqdm(ORIGINS, desc="точки прогноза")})
 print(f"точек прогноза: {len(ORIGINS)} | строк-примеров: {sum(len(v) for v in ORIGIN_CACHE.values()):,} (labels: {len(lab):,})")
 """)
 
@@ -715,22 +838,25 @@ code(r"""
 #@title Валидация модели 2 и ансамбля по фолдам
 rows = []
 for name, cut, a, b in tqdm(FOLDS, desc="folds"):
-    booster = fit_ml(build_train(df, cut, cache=ORIGIN_CACHE))
+    models = fit_ml_ensemble(build_train(df, cut, cache=ORIGIN_CACHE))
     fr, _ = origin_frame(df, cut, b, PIV_ALL)
     y = df[df.date.isin(pd.date_range(a, b))].merge(fr, on=["route", "date", "hour"])
-    y["lgb"] = predict_ml(booster, y)
-    r = {"fold": name, "profile": wape_score(y.boardings, y.prof), "lgb": wape_score(y.boardings, y.lgb)}
-    for wgt in (0.3, 0.5, 0.7):
+    raw = predict_ml_ensemble(models, y)
+    y["lgb"] = anchor_level(y, raw)
+    r = {"fold": name, "profile": wape_score(y.boardings, y.prof), "ML без привязки уровня": wape_score(y.boardings, raw),
+         "ML/профиль, сумма": raw.sum() / y.prof.sum(), "lgb": wape_score(y.boardings, y.lgb)}
+    for wgt in (0.5, 0.7, 0.8, 0.9):
         r[f"blend{wgt}"] = wape_score(y.boardings, (1 - wgt) * y.prof + wgt * y.lgb)
     rows.append(r)
-    print(f"{name}: profile={r['profile']:.4f}  lgb={r['lgb']:.4f}  blend0.3={r['blend0.3']:.4f}")
+    print(f"{name}: profile={r['profile']:.4f}  ML={r['lgb']:.4f}  80% ML={r['blend0.8']:.4f}")
 cv = pd.DataFrame(rows).set_index("fold")
 cv.loc["mean"] = cv.mean()
 print(cv.round(4).to_string())
-# ансамбль всегда включает ML-модель (вес >= 0.3); конкретный вес — по среднему CV
-BLEND_W = float(max([0.3, 0.5, 0.7, 1.0], key=lambda w: cv.loc["mean", {1.0: "lgb"}.get(w, f"blend{w}")]))
+# доля ML в итоговом прогнозе — не меньше ML_MIN_WEIGHT; конкретный вес — по среднему CV
+BLEND_W = float(max([w for w in (0.8, 0.9, 1.0) if w >= ML_MIN_WEIGHT] or [1.0],
+                    key=lambda w: cv.loc["mean", {1.0: "lgb"}.get(w, f"blend{w}")]))
 print("Вес модели 2 (LightGBM) в ансамбле:", BLEND_W, f"| CV ансамбля {cv.loc['mean', {1.0: 'lgb'}.get(BLEND_W, f'blend{BLEND_W}')]:.4f} против профиля {cv.loc['mean', 'profile']:.4f}")
-imp = pd.Series(booster.feature_importance("gain"), index=ML_FEATS).sort_values(ascending=False)
+imp = pd.Series(np.sum([m.feature_importance("gain") for m in models], axis=0), index=ML_FEATS).sort_values(ascending=False)
 print("\nВажность признаков модели 2 (gain, %):"); print((100 * imp / imp.sum()).round(1).to_string())
 """)
 
@@ -781,9 +907,11 @@ def full_forecast(data, cutoff, dates, cache=None):
     fr, pm = origin_frame(data, cutoff, dates.max(), piv)
     p = fr[fr.date.isin(dates)].copy()
     p["pred"] = p.prof
+    pm.ml_models = []
     if BLEND_W > 0:
-        booster = fit_ml(build_train(data, cutoff, cache=cache, piv=piv))
-        p["pred"] = (1 - BLEND_W) * p.prof + BLEND_W * predict_ml(booster, p)
+        models = fit_ml_ensemble(build_train(data, cutoff, cache=cache, piv=piv))
+        pm.ml_models = models
+        p["pred"] = (1 - BLEND_W) * p.prof + BLEND_W * anchor_level(p, predict_ml_ensemble(models, p))
     return apply_knobs(p[["route", "date", "hour", "pred"]], pm), pm
 """)
 
@@ -920,7 +1048,7 @@ def to_submission(pred):
     sub = template[["route", "date", "hour"]].copy()
     sub["date"] = pd.to_datetime(sub["date"])
     sub = sub.merge(pred[["route", "date", "hour", "pred"]], on=["route", "date", "hour"], how="left")
-    sub["prediction"] = sub.pred.fillna(0).clip(lower=0).round().astype(int)
+    sub["prediction"] = np.floor(sub.pred.fillna(0).clip(lower=0) + 0.5).astype(int)   # half-up, только на выгрузке
     sub["date"] = sub.date.dt.strftime("%Y-%m-%d")
     sub = sub[["route", "date", "hour", "prediction"]]
     # проверки из ТЗ
@@ -937,7 +1065,7 @@ fname = OUT_DIR / f"submission_ml_{stamp}_cv{cv_score:.4f}.csv"
 sub.to_csv(fname, sep=";", index=False, encoding="utf-8")
 sub.to_csv(OUT_DIR / "submission_latest.csv", sep=";", index=False, encoding="utf-8")
 json.dump({"best": BEST, "blend_w": BLEND_W, "cv": cv.round(4).to_dict(), "K_holiday": pm.K_holiday, "K_short": pm.K_short,
-           "beta_weather": pm.beta.tolist(), "weather": WEATHER_FOR_FORECAST, "weather_horizon_days": WEATHER_HORIZON_DAYS,
+           "beta_weather_precip_warm": pm.beta.tolist(), "weather_effect_pp": WEATHER_EFFECT, "weather": WEATHER_FOR_FORECAST, "weather_horizon_days": WEATHER_HORIZON_DAYS,
            "ml_feats": ML_FEATS, "ml_rounds": ML_ROUNDS, "origins": len(ORIGINS), "K_WORKING_SATURDAY": K_WORKING_SATURDAY, "K_PRE_NEW_YEAR": K_PRE_NEW_YEAR,
            "K_SEASON": K_SEASON, "ROUTE5_ENABLED": ROUTE5_ENABLED, "leak_test": leak.round(6).to_dict(),
            "stream_wape_score": wape_score(allp.boardings, allp.pred)},
@@ -951,10 +1079,11 @@ year_fc.assign(model_version=stamp).to_csv(ART / "forecast_year_monthly.csv", se
 coef = {
     "model_version": stamp, "formula": "pred = ансамбль(профиль, LightGBM) × K_calendar × K_weather × K_regime × K_incident × K_expert; "
                                         "в UI: pred_ui = pred × K_user(фактор, маршрут, интервал)",
-    "blend_w_ml": BLEND_W, "cv_wape_score": float(cv_score), "stream_wape_score_7d": float(wape_score(allp.boardings, allp.pred)),
+    "blend_w_ml": BLEND_W, "ml_horizons": list(ML_HORIZONS), "ml_anchor_level": ML_ANCHOR_LEVEL, "cv_wape_score": float(cv_score), "stream_wape_score_7d": float(wape_score(allp.boardings, allp.pred)),
     "calendar": {"K_holiday": pm.K_holiday, "K_short": pm.K_short, "K_WORKING_SATURDAY": K_WORKING_SATURDAY,
                  "source": "https://github.com/xmlcalendar/data"},
-    "weather": {"beta_per_unit(temp,precip,snow)": pm.beta.tolist(), "horizon_days": WEATHER_HORIZON_DAYS,
+    "weather": {"beta_per_mm_precip_day_if_warm": pm.beta.tolist(), "warm_temp_c": WARM_TEMP, "effect_pp_day_ahead": WEATHER_EFFECT,
+                "horizon_days": WEATHER_HORIZON_DAYS,
                 "source": "https://open-meteo.com/en/docs/historical-forecast-api"},
     "regimes": [{k: (str(v.date()) if hasattr(v, "date") else v) for k, v in rg.items() if k not in ("S_normal", "ratio")} for rg in pm.regimes],
     "incident": {"K_incident": pm.K_incident, "hours_after_post": 3, "source": "https://t.me/s/DtOperativno"},
@@ -964,6 +1093,19 @@ coef = {
     "ui_sliders": {"weather": [0.8, 1.2], "event": [0.0, 1.5], "season": [0.8, 1.2], "traffic": [0.9, 1.1], "fleet": [0.5, 1.5]},
 }
 json.dump(coef, open(ART / "coefficients.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1, default=str)
+# артефакты ML-модели: бустеры LightGBM + контракт признаков (инференс вне ноутбука)
+for old in ART.glob("lgbm_*.txt"):                  # веса прошлых прогонов не смешиваем с текущими
+    old.unlink()
+ml_names = [f"lgbm_h{hm}_s{sd}.txt" for hm in ML_HORIZONS for sd in ML_SEEDS][:len(pm.ml_models)]
+for nm, m in zip(ml_names, pm.ml_models):
+    m.save_model(str(ART / nm))
+json.dump({"model_version": stamp, "models": ml_names, "seeds": list(ML_SEEDS),
+           "features": ML_FEATS, "categorical": {"route": list(ROUTE_DTYPE.categories)},
+           "target": "boardings / prof (профиль модели 1), вес prof; прогноз = prof × clip(mean(models), 0.3, 2.0)",
+           "anchor_level": ML_ANCHOR_LEVEL, "blend": f"pred = {1 - BLEND_W:.1f}·prof + {BLEND_W:.1f}·ML", "profile_config": BEST,
+           "origins_step_days": ORIGIN_STEP_DAYS, "train_horizons_days": list(ML_HORIZONS), "tech_hours_zero": list(TECH_HOURS),
+           "versions": {"lightgbm": lgb.__version__, "pandas": pd.__version__, "numpy": np.__version__, "python": sys.version.split()[0]}},
+          open(ART / "ml_contract.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1, default=str)
 print("артефакты для сервиса:", sorted(p.name for p in ART.iterdir()))
 print(sub.head())
 if IN_COLAB:
@@ -972,6 +1114,11 @@ if IN_COLAB:
     except Exception as e:
         print("download:", e)
 """)
+
+import hashlib as _hashlib
+_CODE_HASH = _hashlib.sha1("\n".join(s for t, s in CELLS if t == "code").encode("utf-8")).hexdigest()[:12]
+CELLS = [(t, s.replace("__CODE_HASH__", _CODE_HASH)) for t, s in CELLS]
+
 
 def build(path):
     nb = nbf.v4.new_notebook()

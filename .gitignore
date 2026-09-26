@@ -4,3 +4,6 @@ dataset.zip
 
 # кэш Python
 __pycache__/
+
+# чекпоинты ноутбука (веса моделей, промежуточные расчёты)
+checkpoints/
