@@ -58,8 +58,7 @@
   (ноутбук, `backend/forecast`) → API (`backend/api`, `backend/export`) → frontend. Точка входа ML — `ml/README.md`.
 - [x] REST API по параметрам ТЗ: `GET /api/forecast?route=&stop=&horizon=day|month|year&date=|from=&to=&granularity=`.
 - [x] **Тесты**: 21 юнит-тест бэкенда (агрегация час→день→месяц, коэффициенты, горизонты, RFC 9457, экспорт и округление, CSV-парсер).
-- [x] **Замеры** (README, `perf/`): смешанный трафик **1 500 RPS — p95 3 мс, CPU 49%**; **2 500 RPS — p95 102 мс, CPU 68%**, 0 ошибок
-  (хвост p99 — секунды, предел одного контейнера); RAM 1.7 из 2 ГБ; один URL — до 5 673 RPS / p95 55 мс. Сценарий и скрипты воспроизводимы.
+- [x] **Замеры** (README, `perf/`): рабочая acceptance boundary — **2 500 RPS, p95 102 мс, CPU 68%, 100% HTTP success, RAM 1.72 ГБ**. Ступени 3 000+ RPS явно помечены как stress-limit. Повторяемость: `perf/run_mixed.sh`; smoke-проверка: `perf/smoke_test.ps1`; контракт артефактов: `tools/verify_forecast_artifacts.py`.
 - [x] **Запускаемость на чистом клоне** без датасета: факт — из `data/load/load_hourly.csv`; health `DOWN` до окончания загрузки.
 - [x] Ошибки API — RFC 9457 на русском, без стектрейсов.
 - [x] Stateless-инстансы, прогноз предрассчитан, в пути запроса нет ни модели, ни БД.
@@ -89,4 +88,5 @@
 | 4 | Схема архитектуры; область определения и адаптации | ✅ `docs/architecture.md`, `docs/model-applicability.md` |
 | 5 | Производительность + доп. возможности | ✅ README §9 и §10, `perf/` |
 | 6 | Ограничения и план развития | ✅ README §11–12 |
+
 
