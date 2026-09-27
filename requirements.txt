@@ -1,0 +1,3 @@
+# Python-зависимости проекта: ML-контур и служебные скрипты (tools/, perf/).
+# Сервис (backend + frontend + PostgreSQL) собирается в Docker и Python не требует — см. LOCAL_SETUP.md.
+-r ml/requirements.txt

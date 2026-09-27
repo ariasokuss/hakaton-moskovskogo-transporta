@@ -65,7 +65,7 @@ services:
       # Нагрузка с пересадками, агрегат сырых валидаций (tools/build_load.sh).
       - ./data/load:/data/load:ro
       # Снимок внешних источников ML-команды (календарь, погода, посты Дептранса, пробки).
-      - ./mostrans_handoff/mostrans/external_data:/data/external:ro
+      - ./ml/external_data:/data/external:ro
     ports:
       - "8080:8080"
     healthcheck:

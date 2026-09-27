@@ -2,7 +2,7 @@
 # Подключение артефактов ML-модели к сервису «Пантограф».
 #
 # Источник — архив service_artifacts.zip, который ноутбук
-# mostrans_handoff/mostrans/baseline_colab.ipynb сохраняет в MyDrive/mostrans/submissions/
+# ml/pantograph_best_colab.ipynb сохраняет в MyDrive/mostrans/submissions/
 # и скачивает в конце прогона (или папка submissions/artifacts/ с теми же файлами).
 #
 # Кладёт в data/forecast/ (смонтирована в контейнер бэкенда read-only):

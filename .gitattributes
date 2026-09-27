@@ -1,0 +1,4 @@
+# Веса LightGBM: текстовый формат, но переводы строк менять нельзя (CRLF ломает загрузку модели на Windows)
+ml/artifacts/*.txt binary
+# скрипты для Linux-контейнеров и bash
+*.sh text eol=lf

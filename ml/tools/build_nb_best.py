@@ -61,7 +61,7 @@ KAGGLE_FULL_DOWNLOAD = False                           #@param {type:"boolean"}
 DRIVE_DATA_DIR = "/content/drive/MyDrive/mostrans"     #@param {type:"string"}
 # если на Drive нет external_data — ноутбук найдёт её в другой папке Drive или скачает из репозитория проекта
 EXT_REPO_URL = "https://github.com/shotmee/moscow_transport.git"   #@param {type:"string"}
-EXT_REPO_BRANCH = "shotme"                                          #@param {type:"string"}
+EXT_REPO_BRANCH = "keshaptisa"                                       #@param {type:"string"}
 
 SEED = 42
 TECH_HOURS = (2, 3)   # технические валидации (проверка валидаторов, 0.002% объёма) — не используются в профиле, прогноз 0

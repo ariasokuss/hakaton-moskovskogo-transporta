@@ -1,30 +1,105 @@
-# ML-контур
+# ML-контур «Пантограф»
 
-Код обучения и инференса ведёт ML-команда в каталоге [`mostrans_handoff/mostrans/`](../mostrans_handoff/mostrans/)
-(так он передаётся между Colab и репозиторием). Этот каталог — точка входа по структуре проекта.
+Прогноз `boardings(route, date, hour)` — посадок на трамвайных маршрутах по часам на 01.11–31.12.2025.
+Итог: **WAPE-score 0.89731** на лидерборде (порог максимального балла — 0.88).
 
-| Что | Где |
-|---|---|
-| Инструкция запуска, параметры, чекпоинты | [`ML_README.md`](../mostrans_handoff/mostrans/ML_README.md) |
-| **Финальный ноутбук обучения и инференса (Colab)** | [`pantograph_best_colab.ipynb`](../mostrans_handoff/mostrans/pantograph_best_colab.ipynb), исходник — [`tools/build_nb_best.py`](../mostrans_handoff/mostrans/tools/build_nb_best.py): профиль + LightGBM, режимы маршрутов, внешние поправки, проверка гипотез на валидации, сезонный рост уровня `SEASON_GROWTH = 1.03`; лидерборд **0.89731** |
-| Предыдущая версия ноутбука | [`baseline_colab.ipynb`](../mostrans_handoff/mostrans/baseline_colab.ipynb), исходник — [`tools/build_nb.py`](../mostrans_handoff/mostrans/tools/build_nb.py) |
-| **Прогнанный ноутбук финального прогона** (код тот же, с выводами: CV по фолдам, ablation источников, тест на утечку, потоковый бэктест) | [`notebooks_extended/baseline_colab (10).ipynb`](../mostrans_handoff/mostrans/notebooks_extended/) — прогон `20260926_1142`, CV 0.8921, **лидерборд 0.89234** |
-| Пайплайн приёма сырых валидаций (DuckDB, сверка с labels) | [`pipeline/ingest_raw.py`](../mostrans_handoff/mostrans/pipeline/ingest_raw.py) |
-| Внешние данные и скрипты их получения | [`external_data/`](../mostrans_handoff/mostrans/external_data/), описание — [`EXTERNAL_DATA.md`](../mostrans_handoff/mostrans/EXTERNAL_DATA.md) |
-| Артефакты прогноза для сервиса | [`data/forecast/`](../data/forecast/): `forecast_hourly.csv`, `forecast_year_monthly.csv`, `coefficients.json`, `ml_contract.json` |
-| Веса моделей LightGBM (9 шт.: горизонты 3/14/28 × seed 42/43/44) | [`artifacts/`](artifacts/) — `lgbm_h{3,14,28}_s{42,43,44}.txt` прогона `20260927_1334` (по 500 деревьев, L1, 16 признаков по `ml_contract.json`); папка — копия `MyDrive/mostrans/submissions/artifacts/` целиком, прогнозы в ней идентичны `data/forecast/` |
-| Сабмиты | [`submissions/`](../mostrans_handoff/mostrans/submissions/), [`data/forecast/`](../data/forecast/) |
+## Состав каталога
 
-Загрузить модели вне ноутбука:
-
-```python
-import json, lightgbm as lgb, pandas as pd
-c = json.load(open("ml/artifacts/ml_contract.json", encoding="utf-8"))
-models = [lgb.Booster(model_file=f"ml/artifacts/{m}") for m in c["models"]]
-# X — признаки c["features"] в точке прогноза, route — categorical c["categorical"]["route"];
-# прогноз ML = профиль × clip(среднее 9 моделей, 0.3, 2.0), итог = 0.2·профиль + 0.8·ML (см. c["target"], c["blend"])
+```
+ml/
+├── pantograph_best_colab.ipynb   ← финальный ноутбук: данные → профиль → LightGBM → поправки → сабмит и артефакты
+├── tools/build_nb_best.py        ← исходник ноутбука (ячейки в Python); собирает .ipynb
+├── pipeline/ingest_raw.py        ← приём сырых валидаций (10 ГБ CSV → почасовая витрина, сверка с labels 100%)
+├── external_data/                ← внешние данные и парсеры (календарь, погода, Telegram Дептранса)
+├── EXTERNAL_DATA.md              ← источники, ссылки, способы получения, измеренный эффект
+├── artifacts/                    ← веса и артефакты финального прогона (см. ниже)
+├── load_models.py                ← загрузка весов вне ноутбука и проверка контракта
+├── requirements.txt
+└── archive/                      ← предыдущие версии: ноутбуки, прогоны, документы, сабмиты
 ```
 
-Сервис модель не вызывает: прогноз предрассчитан ноутбуком и импортируется как прогон
-(`tools/sync_ml_artifacts.sh <service_artifacts.zip>` → `docker compose restart backend`).
-Контракт между контурами — `ml_contract.json` и формат `route;date;hour;pred;model_version`.
+## Как устроен прогноз
+
+```
+профиль (форма суток 16 нед. × уровень 3 нед., медиана)  ─┐
+LightGBM: 3 горизонта обучения × 3 seed (9 моделей)       ─┼─► смесь по горизонту (вес ML 0.6 на днях 1–21, 0.2 дальше)
+                                                           │
+× календарь (праздники, рабочая суббота)   × погода (дождь в тепло, первые 7 дней)
+× режимы маршрутов (ремонт 7/50 по выходным до 14.11)      × сбои на маршруте
+× сезонный рост уровня SEASON_GROWTH = 1.03 (будни сен→окт +3.4%)          → маршрут 5 = 0
+```
+
+Прогноз **прямой** (direct) на весь горизонт 61 день: признаки фиксируются в точке прогноза, рекурсии нет.
+Валидация — хронологические фолды (6 шт.), только прошлые данные; в ноутбуке есть тест на утечку,
+потоковый бэктест (переобучение каждую неделю) и ячейка **проверки гипотез** — гипотеза попадает в модель,
+только если улучшает средний WAPE-score фолдов.
+
+## Веса и артефакты (`artifacts/`)
+
+| Файл | Что это |
+|---|---|
+| `lgbm_h{3,14,28}_s{42,43,44}.txt` | 9 бустеров LightGBM финального прогона `20260927_1334` (L1, 500 деревьев, 17 признаков) |
+| `ml_contract.json` | контракт: список моделей, признаки и их порядок, категории `route`, формулы target/blend, сезонный рост |
+| `forecast_hourly.csv` | итоговый прогноз `route;date;hour;pred;model_version` без округления — его импортирует сервис |
+| `forecast_year_monthly.csv` | горизонт «год» (качественно): помесячный сценарий ноя 2025 – окт 2026 с интервалом |
+| `coefficients.json` | коэффициенты поправок с источниками — для ползунков в интерфейсе |
+
+Ноутбук при каждом запуске обучает модели заново (детерминированно: фиксированные seed, `deterministic=True`)
+и сохраняет веса и артефакты в `MyDrive/mostrans/submissions/artifacts/`. Каталог `artifacts/` — снимок
+финального прогона; сервис использует копию прогноза в `data/forecast/`.
+
+Проверить и загрузить веса вне ноутбука:
+
+```bash
+python ml/load_models.py        # 9 моделей загружаются, признаки = контракт, прогноз — полная сетка 14 640
+```
+
+```python
+from ml.load_models import load_models
+contract, models = load_models()          # признаки для инференса считает origin_frame() ноутбука
+```
+
+## Запуск
+
+### Google Colab (основной способ, CPU достаточно, ~25–35 мин)
+
+1. Откройте `ml/pantograph_best_colab.ipynb` в Colab → **Runtime → Run all**, разрешите доступ к Drive.
+2. Датасет организаторов скачивается сам с публичного Kaggle `shotme/moscow-transport` (ключ не нужен).
+3. Внешние данные берутся из `MyDrive/mostrans/external_data/`; если папки нет — ноутбук найдёт её на Drive
+   или скачает из этого репозитория (`EXT_REPO_URL`, `EXT_REPO_BRANCH` в первой ячейке).
+4. Результат: `MyDrive/mostrans/submissions/submission_ml_<время>.csv` и `service_artifacts.zip` для сервиса.
+
+### Локально
+
+См. [`../LOCAL_SETUP.md`](../LOCAL_SETUP.md), раздел «ML локально».
+
+### Обновить прогноз в сервисе
+
+```bash
+tools/sync_ml_artifacts.sh путь/к/service_artifacts.zip   # распаковывает в data/forecast/
+docker compose restart backend                             # новый model_version импортируется как новый прогон
+python tools/verify_artifacts.py                           # сверка: ML-файл = БД = выгрузка сервиса
+```
+
+## Основные параметры (первая ячейка ноутбука)
+
+| Параметр | По умолчанию | Смысл |
+|---|---|---|
+| `SEASON_GROWTH` | `1.03` | сезонный рост уровня к зиме, множитель итогового прогноза |
+| `WEATHER_FOR_FORECAST` | `fcst` | погода на горизонте — архив прогнозов Open-Meteo (то, что известно заранее) |
+| `WEATHER_HORIZON_DAYS` | `7` | погода учитывается только на первые 7 дней горизонта |
+| `EVENTS_MODE` | `all` | режимы маршрутов по всем опубликованным новостям (данные после 31.10 разрешены организаторами) |
+| `TRAFFIC_IN_MODEL` | `False` | баллы пробок: эффект измерен, прогноз не улучшает — в сабмит не входят |
+| `ROUTE5_ENABLED` | `False` | маршрут 5 — нули (указание организаторов) |
+| `KAGGLE_FULL_DOWNLOAD` | `False` | `True` — скачать сырые CSV (~10 ГБ) и прогнать пайплайн приёма со сверкой |
+| `USE_CHECKPOINTS` | `True` | долгие шаги кэшируются на Drive; изменили код/данные — шаг пересчитается |
+
+## Архив (`archive/`)
+
+| Каталог | Содержимое |
+|---|---|
+| `archive/notebooks/` | прежние ноутбуки: `baseline_colab` (профиль + ML), `ml_streaming_colab` (чисто ML, потоковый режим) |
+| `archive/notebooks/runs/` | прогнанные версии `baseline_colab_run00…10` (run10 — прогон `20260926_1142`) |
+| `archive/tools/` | исходник прежнего ноутбука `build_nb.py` |
+| `archive/docs/` | рабочие документы ML-команды: идеи, прежняя инструкция, контекст для ассистента, пересказ ТЗ |
+| `archive/submissions/` | ранние сабмиты |

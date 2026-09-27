@@ -36,7 +36,7 @@ management:
 app:
   # Каталог с датасетом организаторов (labels/). Монтируется read-only, в git не лежит.
   dataset-dir: /data/dataset
-  # Артефакты ML-модели (ноутбук mostrans_handoff/mostrans/baseline_colab.ipynb → submissions/artifacts/).
+  # Артефакты ML-модели (ноутбук ml/pantograph_best_colab.ipynb → submissions/artifacts/).
   # Почасовой прогноз без округления: route;date;hour;pred;model_version. Если файла нет —
   # берётся submission_latest.csv из той же папки (route;date;hour;prediction).
   forecast-file: /data/forecast/forecast_hourly.csv

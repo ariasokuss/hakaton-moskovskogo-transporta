@@ -27,8 +27,8 @@ docker compose up -d          # postgres + backend + frontend, датасет н
 
 | Обязательный артефакт ТЗ | Где |
 |---|---|
-| 1. ML-модель, код обучения/инференса, README запуска | [`ml/`](ml/README.md) → [`ML_README.md`](mostrans_handoff/mostrans/ML_README.md), ноутбук, [`data/forecast/`](data/forecast/) |
-| 2. Все внешние данные | [`external_data/`](mostrans_handoff/mostrans/external_data/), реестр со ссылками — [docs/external-sources.md](docs/external-sources.md), проверка эффекта по каждому источнику — [docs/ablation_external_sources.csv](docs/ablation_external_sources.csv), в сервисе — `GET /api/external` |
+| 1. ML-модель, код обучения/инференса, README запуска | [`ml/`](ml/README.md) → [`ml/README.md`](ml/README.md), ноутбук, [`data/forecast/`](data/forecast/) |
+| 2. Все внешние данные | [`external_data/`](ml/external_data/), реестр со ссылками — [docs/external-sources.md](docs/external-sources.md), проверка эффекта по каждому источнику — [docs/ablation_external_sources.csv](docs/ablation_external_sources.csv), в сервисе — `GET /api/external` |
 | 3. Запускаемый сервис, точки входа API, инструкция | этот раздел, [§8 Запуск](#8-запуск), [§9 API](#9-api), оглавление API — `GET http://localhost:8080/` |
 | 4. Схема архитектуры и модулей; область определения и адаптации | [docs/architecture.md](docs/architecture.md), [docs/model-applicability.md](docs/model-applicability.md) |
 | 5. Производительность, доп. возможности | [§9 Производительность](#производительность), [perf/](perf/README.md), [§10](#10-дополнительные-возможности) |
@@ -60,7 +60,7 @@ docker compose up -d          # postgres + backend + frontend, датасет н
 | **> 0.88** | **5** | **10** |
 
 **Результат:** лидерборд **0.89731** — прогон `20260927_1334` с сезонным ростом уровня ×1.03, он же подключён к сервису (> 0.88 — максимум критерия).
-Финальный ноутбук — [`pantograph_best_colab.ipynb`](mostrans_handoff/mostrans/pantograph_best_colab.ipynb),
+Финальный ноутбук — [`pantograph_best_colab.ipynb`](ml/pantograph_best_colab.ipynb),
 без подгонки под лидерборд: модель видит только данные до 31.10, погода — архив прогнозов на ≤ 7 дней.
 Для сравнения: на внутренней валидации (сен → окт) сезонный профиль даёт ≈ 0.90, но на ноябре–декабре
 ему мешают смены режимов (окончание ремонта 7/50, праздники) — их учитывает ансамбль с таблицей режимов.
@@ -219,7 +219,7 @@ docker compose up -d          # postgres + backend + frontend, датасет н
   export/         CSV / XLSX
 /frontend         React 19 + TypeScript
 /ml               точка входа ML: веса моделей (artifacts/), ссылки на код
-/mostrans_handoff/mostrans   ML-код: ноутбук, pipeline/ingest_raw.py, external_data/
+/ml                    ML: финальный ноутбук, веса LightGBM, pipeline, external_data, archive/
 /docs             анализ данных, источники, принципы интерфейса
 /perf             нагрузочные тесты и замеры
 ```
@@ -371,6 +371,8 @@ flowchart LR
 
 ## 8. Запуск
 
+> Подробная инструкция — [LOCAL_SETUP.md](LOCAL_SETUP.md): сервис в Docker и ML-контур локально (`requirements.txt`, данные, запуск ноутбука).
+
 ```bash
 docker compose up -d
 ```
@@ -408,7 +410,7 @@ DATASET_DIR=/путь/к/dataset docker compose up -d
 | `data/forecast/submission_latest.csv` | ML-ноутбук | запасной вариант, если нет `forecast_hourly.csv` (`route;date;hour;prediction`) |
 | `data/load/load_hourly.csv` | `tools/build_load.sh` из сырых 10 ГБ (~8 мин) | нагрузка на вагон с пересадками; `boardings` совпадает с labels организаторов на всех 57 551 ключах |
 | `data/geo/routes_osm.json` | OpenStreetMap (ODbL) | трассы и остановки 9 маршрутов |
-| `mostrans_handoff/mostrans/external_data/` | ML-команда, ссылки в [реестре](docs/external-sources.md) | снимок внешних источников → схема `external.*` |
+| `ml/external_data/` | ML-команда, ссылки в [реестре](docs/external-sources.md) | снимок внешних источников → схема `external.*` |
 
 При старте: миграции схемы (Flyway) → загрузка факта (labels или `load_hourly.csv`) → импорт прогноза ML как
 прогона → расчёт обычного уровня → фоновый годовой прогон; параллельно — внешние источники в `external.*`
@@ -418,7 +420,7 @@ DATASET_DIR=/путь/к/dataset docker compose up -d
 
 ### Обновить прогноз из ML-ноутбука
 
-Ноутбук `mostrans_handoff/mostrans/baseline_colab.ipynb` (описание — [`ML_README.md`](mostrans_handoff/mostrans/ML_README.md))
+Ноутбук `ml/pantograph_best_colab.ipynb` (описание — [`ml/README.md`](ml/README.md))
 в конце прогона сохраняет и скачивает `service_artifacts.zip`:
 
 ```bash
@@ -629,6 +631,7 @@ p95 2.0 мс, p99 18 мс, CPU 67% от 2 vCPU, RAM 1.70 ГБ стабильна
 
 | Файл | Содержание |
 |---|---|
+| [LOCAL_SETUP.md](LOCAL_SETUP.md) | локальный запуск: Docker, ML, requirements |
 | [CLAUDE.md](CLAUDE.md) | зафиксированные требования и архитектурные решения |
 | [docs/architecture.md](docs/architecture.md) | схема модулей, путь запроса, развёртывание, хранилище |
 | [docs/model-applicability.md](docs/model-applicability.md) | область определения и адаптации модели (критерий 2б) |
@@ -637,7 +640,7 @@ p95 2.0 мс, p99 18 мс, CPU 67% от 2 vCPU, RAM 1.70 ГБ стабильна
 | [docs/ui-design-principles.md](docs/ui-design-principles.md) | принципы интерфейса диспетчера |
 | [docs/criteria-checklist.md](docs/criteria-checklist.md) | чек-лист критериев ТЗ |
 | [docs/references.md](docs/references.md) | похожие решения |
-| [ml/README.md](ml/README.md), [ML_README.md](mostrans_handoff/mostrans/ML_README.md) | ML-модель: запуск, параметры, артефакты |
+| [ml/README.md](ml/README.md), [ml/EXTERNAL_DATA.md](ml/EXTERNAL_DATA.md) | ML-модель: запуск, параметры, артефакты |
 | [perf/README.md](perf/README.md) | методика и результаты нагрузочного теста |
 | `EXTERNAL_DATA.md`, `ML_IDEAS.md` | материалы ML-команды |
 

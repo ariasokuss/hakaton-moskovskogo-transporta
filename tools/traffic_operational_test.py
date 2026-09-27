@@ -11,7 +11,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-EXT = ROOT / "mostrans_handoff/mostrans/external_data"
+EXT = ROOT / "ml/external_data"
 EVAL_FROM, EVAL_TO = date(2025, 3, 1), date(2025, 10, 31)
 MIN_BUCKET = 30
 BUCKETS = [("0–4", 0, 4), ("5", 5, 5), ("6–7", 6, 7), ("8–10", 8, 10)]

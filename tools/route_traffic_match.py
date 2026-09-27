@@ -15,7 +15,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-EXT = ROOT / 'mostrans_handoff/mostrans/external_data'
+EXT = ROOT / 'ml/external_data'
 TYPES = {'улица', 'проспект', 'шоссе', 'переулок', 'проезд', 'бульвар', 'площадь', 'набережная', 'тупик', 'аллея',
          'дублёр', 'дублер', 'тоннель', 'мост', 'путепровод', 'эстакада', 'вал', 'линия', 'просек', 'кольцо'}
 # Кольцевые магистрали трамваи только пересекают (по ним не ездят) — к трассе маршрута не относим.

@@ -1,31 +1,36 @@
 {
- "model_version": "20260926_1142",
- "formula": "pred = ансамбль(профиль, LightGBM) × K_calendar × K_weather × K_regime × K_incident × K_expert; в UI: pred_ui = pred × K_user(фактор, маршрут, интервал)",
- "blend_w_ml": 0.8,
+ "model_version": "20260927_1334_g103",
+ "formula": "pred = ансамбль(профиль, LightGBM) × K_calendar × K_weather × K_regime × K_incident × K_expert × K_season_growth(1.03); в UI: pred_ui = pred × K_user(фактор, маршрут, интервал)",
+ "blend_w_ml": 0.33770491803278685,
+ "blend_by_horizon": {
+  "w_near": 0.6,
+  "w_far": 0.2,
+  "h_cut": 21
+ },
  "ml_horizons": [
   3,
   14,
   28
  ],
  "ml_anchor_level": true,
- "cv_wape_score": 0.8920738089223785,
- "stream_wape_score_7d": 0.9141165936467348,
+ "cv_wape_score": 0.8975137387323878,
+ "stream_wape_score_7d": 0.9147642721935331,
  "calendar": {
-  "K_holiday": 0.8956212882720318,
-  "K_short": 0.9966982960922355,
+  "K_holiday": 1.0006206763539574,
+  "K_short": 0.9536930730960582,
   "K_WORKING_SATURDAY": 0.85,
   "source": "https://github.com/xmlcalendar/data"
  },
  "weather": {
   "beta_per_mm_precip_day_if_warm": [
-   -0.018021198268978196
+   -0.0180199219715353
   ],
   "warm_temp_c": 10.0,
   "effect_pp_day_ahead": {
-   "фев–окт": 0.644021174018139,
+   "фев–окт": 0.649726659632921,
    "фев–мар": 0.0,
-   "апр–авг": 1.2236355769871365,
-   "сен–окт": -0.020935037773428533
+   "апр–авг": 1.236371195946484,
+   "сен–окт": -0.025383950454571647
   },
   "horizon_days": 7,
   "source": "https://open-meteo.com/en/docs/historical-forecast-api"
@@ -54,22 +59,23 @@
   }
  ],
  "incident": {
-  "K_incident": 0.8292181098869575,
+  "K_incident": 0.8328432489380369,
   "hours_after_post": 3,
   "source": "https://t.me/s/DtOperativno"
  },
  "traffic": {
   "K_traffic_by_score": {
-   "0-4": 0.9721874037473687,
-   "5": 0.9985144265352967,
-   "6-7": 1.0135136200603765,
-   "8-10": 0.9996829846536599
+   "0-4": 0.9681885557977271,
+   "5": 0.996143021582782,
+   "6-7": 1.0149985311986547,
+   "8-10": 1.0007752159117276
   },
   "in_submission": false,
   "source": "https://t.me/s/DtOperativno ; онлайн — https://export.yandex.ru/bar/reginfo.xml?region=213"
  },
  "expert": {
-  "K_PRE_NEW_YEAR": 0.92,
+  "K_PRE_NEW_YEAR": 0.8980236874938818,
+  "K_PRE_NEW_YEAR_source": "аналог: 9–10.01.2025 к будням следующих недель",
   "K_SEASON": {
    "11": 1.0,
    "12": 0.98
@@ -96,5 +102,10 @@
    0.5,
    1.5
   ]
+ },
+ "season_growth": {
+  "value": 1.03,
+  "applied_to": "итоговый прогноз ноября–декабря",
+  "rationale": "осенний рост уровня продолжается к зиме: будни сен→окт +3.4%, уровень фев–мар 2025 выше октября"
  }
 }
