@@ -11,7 +11,7 @@ def md(s): CELLS.append(("md", s.strip("\n")))
 def code(s): CELLS.append(("code", s.strip("\n")))
 
 md(r"""
-# 🚊 Пантограф — прогноз загрузки трамвайных маршрутов Москвы
+# Пантограф — прогноз загрузки трамвайных маршрутов Москвы
 ### Финальное решение · прогноз на ноябрь–декабрь 2025
 
 > *Из данных — энергия, из энергии — прогноз.*
@@ -23,7 +23,7 @@ md(r"""
 
 ---
 
-## 🧭 Как устроен прогноз
+## Как устроен прогноз
 
 ```
             ┌──────────────── данные организаторов ────────────────┐
@@ -40,7 +40,7 @@ md(r"""
                                                     сабмит route;date;hour;prediction
 ```
 
-## ▶️ Запуск
+## ▶ Запуск
 
 `Runtime → Run all`. GPU не нужен: данных ~60 тыс. строк, всё считается на CPU.
 
@@ -50,7 +50,7 @@ md(r"""
 """)
 
 code(r"""
-#@title ⚙️ Конфиг
+#@title Конфиг
 # --- датасет хакатона: публичный Kaggle-датасет (ключ не нужен) ---------------------
 KAGGLE_DATASET = "shotme/moscow-transport"             #@param {type:"string"}
 KAGGLE_FULL_DOWNLOAD = False                           #@param {type:"boolean"}
@@ -72,7 +72,7 @@ FORECAST_START, FORECAST_END = "2025-11-01", "2025-12-31"
 # "fcst" — архив прогнозов Open-Meteo, и только на первые WEATHER_HORIZON_DAYS дней горизонта (дальше K=1, нейтрально).
 # "fact" — фактическая погода: утечка из будущего, только для анализа, НЕ для сабмита.
 # --- чекпоинты: долгие шаги и веса моделей сохраняются на Drive (MyDrive/mostrans/checkpoints/) и при повторном
-#     запуске загружаются. Ключ — хеш кода ноутбука, данных и настроек: изменили что-то — шаг пересчитается сам.
+# запуске загружаются. Ключ — хеш кода ноутбука, данных и настроек: изменили что-то — шаг пересчитается сам.
 USE_CHECKPOINTS = True                                 #@param {type:"boolean"}
 CODE_HASH = "__CODE_HASH__"                            # подставляется при сборке ноутбука из tools/build_nb.py
 WEATHER_FOR_FORECAST = "fcst"                          #@param ["fcst", "fact"]
@@ -102,7 +102,7 @@ ROUTE5_K = 1.0
 # маршруты, дни, интервал и ссылки с датами публикации. Внутри интервала модель берёт текущий (урезанный) профиль,
 # вне его — «нормальный» профиль выходных, восстановленный по истории до начала работ.
 # EVENTS_MODE: "all" — все опубликованные новости (организаторы разрешили данные после 31.10.2025);
-#              "strict" — только опубликованные до отсечки (для 31.10: окончание «до конца осени» = 30.11)
+# "strict" — только опубликованные до отсечки (для 31.10: окончание «до конца осени» = 30.11)
 EVENTS_MODE = "all"                                    #@param ["all", "strict"]
 REGIMES = [
     dict(name="Ремонт путей в Протопоповском пер.: по выходным 50 не ходит, 7 укорочен",
@@ -136,7 +136,7 @@ CONFIG_SNAPSHOT = {k: v for k, v in dict(globals()).items()
 """)
 
 code(r"""
-#@title 📦 Установка и импорты
+#@title Установка и импорты
 import os, sys, io, time, json, zipfile, warnings, subprocess
 from pathlib import Path
 warnings.filterwarnings("ignore")
@@ -162,7 +162,7 @@ except Exception:
 """)
 
 code(r"""
-#@title 📂 Подключение данных
+#@title Подключение данных
 import shutil, urllib.request
 NEEDED = ["labels/labels_day_train.csv", "labels/labels_day_test.csv", "test_submission.csv"]
 
@@ -231,7 +231,7 @@ print(sorted(p.name for p in EXT.iterdir()))
 """)
 
 code(r"""
-#@title 📥 Загрузка: labels, шаблон сабмита, внешние данные
+#@title Загрузка: labels, шаблон сабмита, внешние данные
 parts = []
 for p in tqdm(["train", "test"], desc="labels"):
     parts.append(pd.read_csv(ds_open(f"labels/labels_day_{p}.csv"), sep=";"))
@@ -257,14 +257,14 @@ INC_FILE = EXT / "tram_incidents_2025.csv"
 incidents = (pd.read_csv(INC_FILE, sep=";", parse_dates=["date"]) if INC_FILE.exists()
              else pd.DataFrame(columns=["post_id", "date", "hour", "route", "cause", "url"]))
 if not INC_FILE.exists():
-    print("⚠️ нет external_data/tram_incidents_2025.csv — поправка на сбои отключена (загрузите файл на Drive)")
+    print("нет external_data/tram_incidents_2025.csv — поправка на сбои отключена (загрузите файл на Drive)")
 
 print(f"labels: {len(lab):,} строк | сетка: {len(df):,} | заполнено нулями: {(len(df)-len(lab)):,}")
 print(f"шаблон сабмита: {template.shape} | календарь: {cal.shape} | погода: {w_fact.shape} | события: {events.shape} | баллы пробок: {traffic.shape}")
 """)
 
 md("""
-## 🧰 Пайплайн приёма сырых валидаций (критерий 2в)
+## Пайплайн приёма сырых валидаций (критерий 2в)
 
 Сырые `train.csv`/`test.csv` → нормализация (время события, успешные валидации, номер маршрута, отсечение «хвоста» месяца, дубликаты)
 → почасовая витрина `route × date × hour` (посадки, попытки, отказы, число бортов и выходов) → **сверка с labels организаторов**.
@@ -284,14 +284,14 @@ else:
     print("Сырые данные не скачаны (KAGGLE_FULL_DOWNLOAD=False) — пайплайн пропущен. Модель обучается на labels, это те же агрегаты.")
 """)
 
-md("## 🔎 EDA")
+md("##  EDA")
 
 code(r"""
 #@title Маршруты: объём, покрытие, доля в WAPE
 t = df.groupby("route").agg(total=("boardings", "sum"), nonzero_hours=("boardings", lambda s: (s > 0).sum()))
 t["share_%"] = (100 * t.total / t.total.sum()).round(1)
 display(t.sort_values("total", ascending=False)) if "display" in dir() else print(t)
-print("⚠️ маршрут 5 в истории:", int(t.loc[5, "total"]), "посадок → прогноз 0 (возвращён только 17.12.2025, см. EXTERNAL_DATA.md)")
+print("маршрут 5 в истории:", int(t.loc[5, "total"]), "посадок → прогноз 0 (возвращён только 17.12.2025, см. EXTERNAL_DATA.md)")
 """)
 
 code(r"""
@@ -358,7 +358,7 @@ print("corr(ratio, temp) =", x.corr().loc["ratio", "temp"].round(3), "| corr(rat
 """)
 
 md("""
-## 🧱 Модель 1: профиль × поправки
+## Модель 1: профиль × поправки
 
 * **Профиль** `S[route, ptype, hour] = Level[route, ptype] × Shape[route, ptype, hour]`:
   * `Level` — суточный объём за последние `level_weeks` «чистых» недель (уровень быстро дрейфует, нужно свежее окно);
@@ -388,7 +388,7 @@ def cached(name, parts, fn):
     if USE_CHECKPOINTS:
         CKPT_DIR.mkdir(parents=True, exist_ok=True)
         pd.to_pickle(res, path)
-        print(f"💾 чекпоинт сохранён: {path.name}")
+        print(f" чекпоинт сохранён: {path.name}")
     return res
 
 def wape_score(y, p):
@@ -734,7 +734,7 @@ print("BEST:", BEST)
 """)
 
 code(r"""
-#@title 🧪 Проверка гипотез на валидации (только прошлые данные, выбор по CV)
+#@title Проверка гипотез на валидации (только прошлые данные, выбор по CV)
 # H1 — ансамбль окон формы суток (добавить окно 8 недель); H2 — рост уровня по тренду будних дней (по маршрутам или общий).
 # Гипотеза включается в финальную модель, только если улучшает средний WAPE-score фолдов.
 HYP = {"база (BEST)": {},
@@ -830,7 +830,7 @@ print(f"K_traffic по корзинам балла (на 31.10): {ProfileModel(*
 """)
 
 md("""
-## 🤖 Модель 2: прямой многогоризонтный LightGBM, обученный в потоковой постановке
+## Модель 2: прямой многогоризонтный LightGBM, обученный в потоковой постановке
 
 Как модель будет работать в проде: в момент `t` она видит только данные до `t` и прогнозирует сразу весь горизонт `t+1 … t+61` (direct, без рекурсии).
 Так же она и **обучается**: в истории через каждые `ORIGIN_STEP_DAYS` дней ставится «точка прогноза» `t`. Признаки считаются строго по данным до `t`,
@@ -1023,7 +1023,7 @@ ax = (1 - dd).plot(figsize=(16, 3.5), title="F1: дневной WAPE-score по 
 ax.axhline(0.88, ls="--", c="gray"); plt.show()
 """)
 
-md("## 🚀 Финальный прогноз на ноябрь–декабрь 2025 и сабмит")
+md("##  Финальный прогноз на ноябрь–декабрь 2025 и сабмит")
 
 code(r"""
 #@title Полный пайплайн прогноза: данные до отсечки → прогноз на горизонт
@@ -1069,7 +1069,7 @@ def full_forecast(data, cutoff, dates, cache=None):
 """)
 
 md("""
-## 🔒 Проверка на утечку данных
+## Проверка на утечку данных
 
 1. **Тест с порчей будущего.** Данные после отсечки перемешиваются и умножаются на 10. Прогноз должен совпасть с исходным **бит в бит**.
    Если модель где-то подсматривает в будущее (признаки, разметка аномалий, подбор коэффициентов), прогноз изменится.
@@ -1098,7 +1098,7 @@ for name, cut, a, b in tqdm(LEAK_FOLDS, desc="leak test"):
                       "WAPE-score": wape_score(y.boardings, y.pred)})
 leak = pd.DataFrame(leak_rows).set_index("fold")
 print(leak.to_string())
-assert (leak[["max|Δ| порча", "max|Δ| обрезка"]] < 1e-6).all().all(), "⚠️ прогноз зависит от данных после отсечки — УТЕЧКА"
+assert (leak[["max|Δ| порча", "max|Δ| обрезка"]] < 1e-6).all().all(), " прогноз зависит от данных после отсечки — УТЕЧКА"
 
 checks = {
     "погода: архив прогнозов, а не факт": WEATHER_FOR_FORECAST == "fcst",
@@ -1110,11 +1110,11 @@ checks = {
     "сбои: K_incident обучается только на постах до отсечки": True,
 }
 for k, v in checks.items():
-    print(("✅" if v else "❌"), k)
-print(("✅" if EVENTS_MODE == "strict" else "⚠️"), f"события/режимы: EVENTS_MODE={EVENTS_MODE!r}",
+    print(("" if v else ""), k)
+print(("" if EVENTS_MODE == "strict" else ""), f"события/режимы: EVENTS_MODE={EVENTS_MODE!r}",
       "(только опубликованные до отсечки)" if EVENTS_MODE == "strict" else
       "(используются и новости после отсечки — разрешено организаторами; дают дату восстановления движения 15.11)")
-print("\n✅ Прогноз не зависит от данных после отсечки")
+print("\n Прогноз не зависит от данных после отсечки")
 """)
 
 code(r"""
@@ -1138,11 +1138,11 @@ code(r"""
 pm_chk = ProfileModel(**BEST).fit(df, "2025-10-31")
 for rg in pm_chk.regimes:
     print(f"{rg['name']}\n  интервал: {rg['start'].date()} … {rg['end'].date()}  (EVENTS_MODE={EVENTS_MODE})")
-    print("  выходные / будни до начала работ:", rg["ratio"].unstack("ptype")[["sat", "sun"]].round(2).to_dict("index"))
+    print("выходные / будни до начала работ:", rg["ratio"].unstack("ptype")[["sat", "sun"]].round(2).to_dict("index"))
     chk = pm_chk._raw(pd.date_range("2025-11-01", "2025-12-31"))
     chk = chk[chk.route.isin(rg["routes"])].groupby(["date", "route"]).pred.sum().unstack()
     wk = chk.index.dayofweek >= 5
-    print("  прогноз на выходные (посадок в сутки):")
+    print("прогноз на выходные (посадок в сутки):")
     print(chk[wk].round(0).astype(int).to_string())
 """)
 
@@ -1196,7 +1196,7 @@ print((year_fc.groupby("month")[["boardings", "low", "high"]].sum() / 1e6).round
 """)
 
 code(r"""
-#@title 💾 Сохранение сабмита + валидация формата
+#@title Сохранение сабмита + валидация формата
 def to_submission(pred):
     sub = template[["route", "date", "hour"]].copy()
     sub["date"] = pd.to_datetime(sub["date"])
@@ -1225,7 +1225,7 @@ json.dump({"season_growth": SEASON_GROWTH, "best": BEST, "blend_w": BLEND_W, "bl
            "K_SEASON": K_SEASON, "ROUTE5_ENABLED": ROUTE5_ENABLED, "leak_test": leak.round(6).to_dict(),
            "stream_wape_score": wape_score(allp.boardings, allp.pred)},
           open(OUT_DIR / f"run_{stamp}.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1, default=str)
-print(f"✅ сохранено: {fname}\n   сумма прогноза: {sub.prediction.sum():,} | CV WAPE-score (mean по фолдам): {cv_score:.4f}")
+print(f" сохранено: {fname}\n   сумма прогноза: {sub.prediction.sum():,} | CV WAPE-score (mean по фолдам): {cv_score:.4f}")
 
 # артефакты для сервиса (API/БД/UI): почасовой прогноз без округления, годовой сценарий, коэффициенты с источниками
 ART = OUT_DIR / "artifacts"; ART.mkdir(exist_ok=True)
