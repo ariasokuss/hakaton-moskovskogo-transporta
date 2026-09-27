@@ -1,0 +1,26 @@
+API: http://localhost:8080 · фронтенд: http://localhost:3000 · 2026-09-26T18:36:32Z
+PASS  GET /                              200      3068 B
+PASS  GET /actuator/health               200       640 B
+PASS  GET /api/meta                      200       342 B
+PASS  GET /api/routes                    200      1473 B
+PASS  GET /api/stops                     200     59093 B
+PASS  GET /api/geometry                  200    256960 B
+PASS  GET /api/dashboard                 200     27860 B
+PASS  GET /api/forecast day              200      2704 B
+PASS  GET /api/forecast month            200      3317 B
+PASS  GET /api/forecast year             200      1473 B
+PASS  GET /api/forecast interval         200      7970 B
+PASS  GET /api/forecast stop             200      2621 B
+PASS  GET /api/attention                 200      1493 B
+PASS  GET /api/coefficients              200      3733 B
+PASS  GET /api/external                  200      1809 B
+PASS  GET /api/export csv                200     10015 B
+PASS  GET /api/export xlsx               200     12405 B
+PASS  export csv: данные           270 строк данных (≥ 270)
+PASS  export submission: 14 640 строк 14640 строк данных (≥ 14640)
+PASS  ошибка: неизвестный горизонт 400       211 B
+PASS  ошибка: дата вне прогноза 404       277 B
+PASS  фронтенд /                 200       455 B
+PASS  фронтенд → /api/meta (прокси) 200       342 B
+
+ИТОГ: PASS 23, FAIL 0

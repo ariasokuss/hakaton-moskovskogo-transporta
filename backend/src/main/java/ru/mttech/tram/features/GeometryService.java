@@ -105,6 +105,13 @@ public class GeometryService {
             shares.put(routeId, List.copyOf(list));
         });
         stopShares = Map.copyOf(shares);
+        Map<Integer, String> term = new LinkedHashMap<>();
+        for (JsonNode r : root.get("routes")) {
+            String n = r.get("name").asString();
+            int i = n.indexOf(':'), j = n.indexOf("=>");
+            if (i > 0 && j > i) term.putIfAbsent(r.get("route_id").asInt(), n.substring(i + 1, j).strip() + " — " + n.substring(j + 2).strip());
+        }
+        terminals = Map.copyOf(term);
 
         for (Map<String, Object> st : stops.values()) {
             features.add(Map.of("type", "Feature",
@@ -116,6 +123,13 @@ public class GeometryService {
                         "url", "https://www.openstreetmap.org", "fetchedAt", root.get("fetched_at").asString()));
         log.info("Геометрия загружена: {} направлений, {} остановок", root.get("routes").size(), stops.size());
     }
+
+    /** Конечные маршрута из названия направления в OSM («Трамвай 17: Медведково => Усадьба Останкино»). */
+    public String terminals(int routeId) {
+        return terminals.get(routeId);
+    }
+
+    private volatile Map<Integer, String> terminals = Map.of();
 
     public Map<String, Object> geoJson() {
         return geoJson;

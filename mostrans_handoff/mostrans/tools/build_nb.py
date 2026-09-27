@@ -69,7 +69,8 @@ WEATHER_HORIZON_DAYS = 7                               # на сколько д�
 
 # Экспертные коэффициенты (нет аналогов в истории) — те же «ручки», что будут в UI
 K_WORKING_SATURDAY = 0.85   # рабочая суббота 01.11: будний профиль × K
-K_PRE_NEW_YEAR = 0.92       # 29–30.12: будний профиль × K
+K_PRE_NEW_YEAR = None       # 29–30.12: будний профиль × K; None — по данным: аналог «первые рабочие дни после
+                            # новогодних каникул» (9–10.01.2025 к будням следующих недель ≈ 0.90)
 K_SEASON = {11: 1.00, 12: 0.98}  # месячная поправка к уровню сен–окт (зима, предНГ)
 
 # Маршрут 5: в истории нет. Анонс Дептранса до 01.11 — «запуск к концу 2025», факт — 17.12.2025 (t.me/DtRoad/55381).
@@ -405,7 +406,8 @@ code(r"""
 #@title Класс ProfileModel
 class ProfileModel:
     def __init__(self, n_weeks=6, agg="median", exclude_summer=True, use_weather=True, use_calendar=True, level_weeks=None,
-                 drop_anomalies=False, use_regimes=True, use_traffic=None, use_incidents=True):
+                 drop_anomalies=False, use_regimes=True, use_traffic=None, use_incidents=True,
+                 recent_weeks=4, recent_w=0.3):
         self.n_weeks, self.agg, self.exclude_summer = n_weeks, agg, exclude_summer
         self.level_weeks = level_weeks or n_weeks        # None → уровень и форма по одному окну (старый профиль)
         self.use_weather, self.use_calendar = use_weather, use_calendar
@@ -413,6 +415,7 @@ class ProfileModel:
         self.use_regimes = use_regimes
         self.use_traffic = TRAFFIC_IN_MODEL if use_traffic is None else use_traffic
         self.use_incidents = use_incidents
+        self.recent_weeks, self.recent_w = recent_weeks, recent_w   # доля «свежей» формы суток (последние недели)
 
     def _clean_days(self, cutoff):
         c = CAL.loc[:cutoff]
@@ -436,17 +439,26 @@ class ProfileModel:
         tr["ptype"] = ptype_of(pd.DatetimeIndex(tr.date)).values
         shape = tr[tr.date.isin(days)].groupby(["route", "ptype", "hour"]).boardings.agg(self.agg)
         shape = shape / shape.groupby(level=["route", "ptype"]).transform("sum")
+        if self.recent_w > 0:
+            # форма суток «плывёт» по сезону (темнеет раньше, сдвигаются пики): к длинному окну примешиваем свежие недели.
+            # CV: +0.04 п.п. в среднем, лучше на 4 фолдах из 6
+            sr = tr[tr.date.isin(days[-self.recent_weeks * 7:])].groupby(["route", "ptype", "hour"]).boardings.agg(self.agg)
+            sr = sr / sr.groupby(level=["route", "ptype"]).transform("sum")
+            shape = ((1 - self.recent_w) * shape + self.recent_w * sr.reindex(shape.index).fillna(shape)).fillna(0)
         level = (tr[tr.date.isin(lvl_days)].groupby(["route", "ptype", "date"]).boardings.sum()
                    .groupby(level=["route", "ptype"]).agg(self.agg))
         self.S = (shape * level.reindex(shape.index.droplevel("hour")).values).fillna(0)
         self.level = level
         self.regimes = [self._normal_profile(data, rg) for rg in known_regimes(cutoff)] if self.use_regimes else []
-        # --- K по календарю: факт / профиль на праздниках и сокращённых днях до отсечки
+        # --- K по календарю: праздник в будний день — к воскресеньям ТОЙ ЖЕ поры, сокращённый день — к таким же будням.
+        #     Сравнение с профилем на отсечке смешивало эффект праздника с сезоном (январские праздники при зимнем уровне
+        #     против октябрьского профиля) и занижало K до 0.90; к «своим» воскресеньям праздник ≈ 0.99.
         hist = data[data.date <= cutoff]
-        self.K_holiday, self.K_short = 1.0, 1.0
+        self.K_holiday, self.K_short, self.K_pre_ny = 1.0, 1.0, 0.92
         if self.use_calendar:
-            self.K_holiday = self._k(hist, CAL.index[(CAL.is_holiday == 1) & (CAL.index <= cutoff)], default=0.82)
-            self.K_short = self._k(hist, CAL.index[(CAL.is_short_workday == 1) & (CAL.dow < 5) & (CAL.index <= cutoff)], default=1.0)
+            self.K_holiday = self._k_recent(hist, CAL.index[(CAL.is_holiday == 1) & (CAL.dow < 5) & (CAL.index <= cutoff)], "sun", 1.0)
+            self.K_short = self._k_recent(hist, CAL.index[(CAL.is_short_workday == 1) & (CAL.dow < 5) & (CAL.index <= cutoff)], "same_dow", 1.0)
+            self.K_pre_ny = self._k_after_new_year(hist, 0.92)
         # --- K по погоде: дождь днём при t ≥ WARM_TEMP. Коэффициент — по остаткам прогноза на день вперёд
         #     (DAY_RESID: факт / прогноз без погоды, модель видела только прошлое), только дни до отсечки.
         #     Абсолютная температура не используется: она кодирует сезон, а не погоду (проверено — ухудшало прогноз)
@@ -501,6 +513,36 @@ class ProfileModel:
         rg["ratio"] = ratio
         rg["S_normal"] = S_norm[S_norm.index.get_level_values("ptype").isin(rg["ptypes"])]
         return rg
+
+    def _k_recent(self, hist, days, ref, default):
+        # факт дня / медиана 4 предыдущих опорных дней той же поры (ref: "sun" — воскресенья, "same_dow" — такие же будни)
+        tot = hist.groupby("date").boardings.sum()
+        tot = tot[tot > 0]
+        vals = []
+        for d in days:
+            if d not in tot.index:
+                continue
+            if ref == "sun":
+                prev = [x for x in tot.index if x < d and x.dayofweek == 6 and CAL.loc[x, "is_holiday"] == 0][-4:]
+            else:
+                prev = [x for x in tot.index if x < d and x.dayofweek == d.dayofweek and CAL.loc[x, "is_day_off"] == 0][-4:]
+            if len(prev) >= 3:
+                vals.append(tot[d] / tot.loc[prev].median())
+        return float(np.median(vals)) if vals else default
+
+    def _k_after_new_year(self, hist, default):
+        # аналог 29–30.12 (последние рабочие дни перед новогодними каникулами): первые два рабочих дня после каникул
+        # к таким же дням недели следующих 3 недель — симметричный «праздничный» спад деловой активности
+        tot = hist.groupby("date").boardings.sum()
+        work = [d for d in tot.index if d.month == 1 and CAL.loc[d, "is_day_off"] == 0]
+        if len(work) < 17:
+            return default
+        vals = []
+        for d in work[:2]:
+            ref = [tot[x] for x in work[2:17] if x.dayofweek == d.dayofweek]
+            if ref:
+                vals.append(tot[d] / np.median(ref))
+        return float(np.mean(vals)) if vals else default
 
     def _k(self, hist, days, default):
         days = [d for d in days if d in set(hist.date)]
@@ -557,6 +599,7 @@ FOLDS = [  # (имя, отсечка, начало, конец)
     ("F4 сер.сен→окт (47д)", "2025-09-14", "2025-09-15", "2025-10-31"),
     ("F5 сер.окт→окт (19д)", "2025-10-12", "2025-10-13", "2025-10-31"),
     ("F3 мар→апр–май (61д, праздники)", "2025-03-31", "2025-04-01", "2025-05-31"),
+    ("F6 фев→мар (31д, зима)", "2025-02-28", "2025-03-01", "2025-03-31"),
 ]
 def evaluate(make_model, folds=FOLDS, verbose=False, return_preds=False):
     res, preds = {}, {}
@@ -717,7 +760,8 @@ md("""
   Модель, обученная на всех 61 днях, выучивает сезонный дрейф января–августа и переносит его на осень: на фолдах
   ML отдельно 0.887; на коротких горизонтах — 0.891 (≤14) … 0.8922 (ансамбль трёх). Признаки фиксируются в точке прогноза,
   поэтому модель применяется к любому дню горизонта (прямой прогноз).
-* **Итоговый прогноз — ML с весом ≥ 80%** (`ML_MIN_WEIGHT`), профиль — 20% как опорная линия; вес внутри допустимого диапазона — по CV.
+* **Итоговый прогноз — смесь ML и профиля с весом, зависящим от горизонта**: на ближних днях точнее ML (лаги свежие),
+  на дальних — профиль (ML там экстраполирует). Вес ML `w_near` для дней ≤ `h_cut` и `w_far` дальше — выбираются по CV.
 * **Привязка уровня** (`ML_ANCHOR_LEVEL`): суммарный объём маршрута на горизонте берётся от профиля, ML распределяет его по дням и часам.
   Без привязки уровень ML на 61 день нестабилен: в одном из прогонов −3.5% к профилю, лидерборд 0.87 вместо 0.89.
   С привязкой на фолдах: профиль 0.8935, 80% ML — 0.8935, 100% ML — 0.892.
@@ -730,14 +774,17 @@ ORIGIN_STEP_DAYS = 3                                   #@param {type:"integer"}
 ML_ROUNDS = 500
 ML_HORIZONS = (3, 14, 28)                              # горизонты обучения LightGBM (дней вперёд)
 ML_SEEDS = (42, 43, 44)                                # на каждый горизонт — 3 модели с разными seed, прогноз — среднее 9 моделей
-ML_MIN_WEIGHT = 0.8                                    #@param {type:"number"}
+# вес ML в итоговом прогнозе по горизонту: w_near для дней 1..h_cut, w_far дальше — перебор по CV
+BLEND_GRID = dict(w_near=(0.6, 0.8, 0.9, 1.0), w_far=(0.2, 0.3, 0.5, 0.7, 0.8), h_cut=(7, 14, 21, 28))
 ML_ANCHOR_LEVEL = True                                 #@param {type:"boolean"}
 # True: суммарный объём маршрута на горизонте задаёт профиль, распределение по дням и часам — ML.
 # На горизонте 61 день уровень у LightGBM нестабилен (в прогоне 26.09 −3.5% к профилю → лидерборд 0.87)
-# минимальная доля ML в итоговом прогнозе: 0.8 → вес выбирается по CV из 0.8/0.9/1.0; 1.0 → только ML
 ML_FEATS = ["route", "hour", "dow", "ptype", "is_holiday", "is_short_workday", "is_working_weekend", "is_day_off",
-            "pre_new_year_week", "days_to_ny", "lvl_wd5", "lvl_wd10", "lvl_wd20", "lag_w1", "lag_m4", "in_regime"]
-ML_PARAMS = dict(objective="l1", learning_rate=0.03, num_leaves=63, min_data_in_leaf=200, feature_fraction=0.8,
+            "pre_new_year_week", "days_to_ny", "lvl_wd5", "lvl_wd10", "lvl_wd20", "lag_w1", "lag_m4", "in_regime",
+            "hour_share"]
+# сильная регуляризация: с 63 листьями / 200 примеров модель переобучалась на особенностях истории
+# (фолд после летнего спада 0.878 → 0.891, ML отдельно 0.888 → 0.893 по среднему 5 фолдов)
+ML_PARAMS = dict(objective="l1", learning_rate=0.03, num_leaves=15, min_data_in_leaf=1000, feature_fraction=0.8,
                  bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0, seed=SEED, verbose=-1, num_threads=os.cpu_count(),
                  deterministic=True, force_col_wise=True)   # детерминизм нужен тесту на утечку
 ROUTE_DTYPE = pd.CategoricalDtype(sorted(r for r in ROUTES if r != 5))
@@ -773,6 +820,7 @@ def origin_frame(data, t, end, piv):
     f["lag_m4"] = np.nanmean(np.vstack([lag(k) for k in range(4)]), axis=0)
     for col in ["lag_w1", "lag_m4"]:
         f[col] = f[col] / f.prof.clip(lower=1)
+    f["hour_share"] = f.prof / f.groupby(["route", "date"]).prof.transform("sum").replace(0, np.nan)   # доля часа в сутках профиля
     f["h"] = (f.date - t).dt.days                                   # горизонт (не признак — для отбора целей)
     f["in_regime"] = 0
     for rg in pm.regimes:
@@ -842,7 +890,7 @@ print(f"точек прогноза: {len(ORIGINS)} | строк-примеро�
 
 code(r"""
 #@title Валидация модели 2 и ансамбля по фолдам
-rows = []
+rows, FOLD_FRAMES = [], []
 for name, cut, a, b in tqdm(FOLDS, desc="folds"):
     models = fit_ml_ensemble(build_train(df, cut, cache=ORIGIN_CACHE))
     fr, _ = origin_frame(df, cut, b, PIV_ALL)
@@ -851,17 +899,27 @@ for name, cut, a, b in tqdm(FOLDS, desc="folds"):
     y["lgb"] = anchor_level(y, raw)
     r = {"fold": name, "profile": wape_score(y.boardings, y.prof), "ML без привязки уровня": wape_score(y.boardings, raw),
          "ML/профиль, сумма": raw.sum() / y.prof.sum(), "lgb": wape_score(y.boardings, y.lgb)}
-    for wgt in (0.5, 0.7, 0.8, 0.9):
+    for wgt in (0.5, 0.8):
         r[f"blend{wgt}"] = wape_score(y.boardings, (1 - wgt) * y.prof + wgt * y.lgb)
     rows.append(r)
+    FOLD_FRAMES.append(y[["boardings", "prof", "lgb", "h"]].assign(fold=name))
     print(f"{name}: profile={r['profile']:.4f}  ML={r['lgb']:.4f}  80% ML={r['blend0.8']:.4f}")
 cv = pd.DataFrame(rows).set_index("fold")
+
+# вес ML по горизонту: перебор (w_near, w_far, h_cut) по среднему WAPE-score фолдов
+def blend_weight(h, b=None):
+    b = b or BLEND
+    return np.where(np.asarray(h) <= b["h_cut"], b["w_near"], b["w_far"])
+def cv_blend(b):
+    return [wape_score(f.boardings, (1 - blend_weight(f.h, b)) * f.prof + blend_weight(f.h, b) * f.lgb) for f in FOLD_FRAMES]
+cands = [dict(w_near=wn, w_far=wf, h_cut=hc) for wn in BLEND_GRID["w_near"] for wf in BLEND_GRID["w_far"] for hc in BLEND_GRID["h_cut"]]
+BLEND = max(cands, key=lambda b: np.mean(cv_blend(b)))
+cv["по горизонту"] = cv_blend(BLEND)
 cv.loc["mean"] = cv.mean()
 print(cv.round(4).to_string())
-# доля ML в итоговом прогнозе — не меньше ML_MIN_WEIGHT; конкретный вес — по среднему CV
-BLEND_W = float(max([w for w in (0.8, 0.9, 1.0) if w >= ML_MIN_WEIGHT] or [1.0],
-                    key=lambda w: cv.loc["mean", {1.0: "lgb"}.get(w, f"blend{w}")]))
-print("Вес модели 2 (LightGBM) в ансамбле:", BLEND_W, f"| CV ансамбля {cv.loc['mean', {1.0: 'lgb'}.get(BLEND_W, f'blend{BLEND_W}')]:.4f} против профиля {cv.loc['mean', 'profile']:.4f}")
+BLEND_W = float(np.mean(blend_weight(np.arange(1, 62))))     # средний вес ML на горизонте ноя–дек (61 день)
+print(f"Вес ML: {BLEND['w_near']} на днях 1–{BLEND['h_cut']}, {BLEND['w_far']} дальше (в среднем на 61 день — {BLEND_W:.2f}) | "
+      f"CV {cv.loc['mean', 'по горизонту']:.4f} против профиля {cv.loc['mean', 'profile']:.4f} и 80% ML {cv.loc['mean', 'blend0.8']:.4f}")
 imp = pd.Series(np.sum([m.feature_importance("gain") for m in models], axis=0), index=ML_FEATS).sort_values(ascending=False)
 print("\nВажность признаков модели 2 (gain, %):"); print((100 * imp / imp.sum()).round(1).to_string())
 """)
@@ -895,7 +953,8 @@ def apply_knobs(base, pm):
     # экспертные поправки без аналогов в истории (те же ручки — в UI)
     p = base.copy()
     c = CAL.loc[p.date]
-    p.loc[c.pre_new_year_week.values.astype(bool) & (c.is_day_off.values == 0) & (p.date >= "2025-12-29").values, "pred"] *= K_PRE_NEW_YEAR
+    k_ny = K_PRE_NEW_YEAR if K_PRE_NEW_YEAR is not None else pm.K_pre_ny
+    p.loc[c.pre_new_year_week.values.astype(bool) & (c.is_day_off.values == 0) & (p.date >= "2025-12-29").values, "pred"] *= k_ny
     p["pred"] *= p.date.dt.month.map(K_SEASON).fillna(1.0).values
     p = p[p.route != 5]
     r5 = route5_pred(pm, sorted(base.date.unique()))
@@ -917,7 +976,8 @@ def full_forecast(data, cutoff, dates, cache=None):
     if BLEND_W > 0:
         models = fit_ml_ensemble(build_train(data, cutoff, cache=cache, piv=piv))
         pm.ml_models = models
-        p["pred"] = (1 - BLEND_W) * p.prof + BLEND_W * anchor_level(p, predict_ml_ensemble(models, p))
+        w = blend_weight((p.date - cutoff).dt.days.values)          # вес ML по горизонту
+        p["pred"] = (1 - w) * p.prof + w * anchor_level(p, predict_ml_ensemble(models, p))
     return apply_knobs(p[["route", "date", "hour", "pred"]], pm), pm
 """)
 
@@ -1066,13 +1126,13 @@ def to_submission(pred):
 
 sub = to_submission(pred)
 stamp = time.strftime("%Y%m%d_%H%M")
-cv_score = cv.loc["mean", {0.0: "profile", 1.0: "lgb"}.get(BLEND_W, f"blend{BLEND_W}")]
+cv_score = cv.loc["mean", "по горизонту"]
 fname = OUT_DIR / f"submission_ml_{stamp}_cv{cv_score:.4f}.csv"
 sub.to_csv(fname, sep=";", index=False, encoding="utf-8")
 sub.to_csv(OUT_DIR / "submission_latest.csv", sep=";", index=False, encoding="utf-8")
-json.dump({"best": BEST, "blend_w": BLEND_W, "cv": cv.round(4).to_dict(), "K_holiday": pm.K_holiday, "K_short": pm.K_short,
+json.dump({"best": BEST, "blend_w": BLEND_W, "blend_by_horizon": BLEND, "cv": cv.round(4).to_dict(), "K_holiday": pm.K_holiday, "K_short": pm.K_short,
            "beta_weather_precip_warm": pm.beta.tolist(), "weather_effect_pp": WEATHER_EFFECT, "weather": WEATHER_FOR_FORECAST, "weather_horizon_days": WEATHER_HORIZON_DAYS,
-           "ml_feats": ML_FEATS, "ml_rounds": ML_ROUNDS, "origins": len(ORIGINS), "K_WORKING_SATURDAY": K_WORKING_SATURDAY, "K_PRE_NEW_YEAR": K_PRE_NEW_YEAR,
+           "ml_feats": ML_FEATS, "ml_rounds": ML_ROUNDS, "origins": len(ORIGINS), "K_WORKING_SATURDAY": K_WORKING_SATURDAY, "K_PRE_NEW_YEAR": K_PRE_NEW_YEAR if K_PRE_NEW_YEAR is not None else pm.K_pre_ny,
            "K_SEASON": K_SEASON, "ROUTE5_ENABLED": ROUTE5_ENABLED, "leak_test": leak.round(6).to_dict(),
            "stream_wape_score": wape_score(allp.boardings, allp.pred)},
           open(OUT_DIR / f"run_{stamp}.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1, default=str)
@@ -1085,7 +1145,7 @@ year_fc.assign(model_version=stamp).to_csv(ART / "forecast_year_monthly.csv", se
 coef = {
     "model_version": stamp, "formula": "pred = ансамбль(профиль, LightGBM) × K_calendar × K_weather × K_regime × K_incident × K_expert; "
                                         "в UI: pred_ui = pred × K_user(фактор, маршрут, интервал)",
-    "blend_w_ml": BLEND_W, "ml_horizons": list(ML_HORIZONS), "ml_anchor_level": ML_ANCHOR_LEVEL, "cv_wape_score": float(cv_score), "stream_wape_score_7d": float(wape_score(allp.boardings, allp.pred)),
+    "blend_w_ml": BLEND_W, "blend_by_horizon": BLEND, "ml_horizons": list(ML_HORIZONS), "ml_anchor_level": ML_ANCHOR_LEVEL, "cv_wape_score": float(cv_score), "stream_wape_score_7d": float(wape_score(allp.boardings, allp.pred)),
     "calendar": {"K_holiday": pm.K_holiday, "K_short": pm.K_short, "K_WORKING_SATURDAY": K_WORKING_SATURDAY,
                  "source": "https://github.com/xmlcalendar/data"},
     "weather": {"beta_per_mm_precip_day_if_warm": pm.beta.tolist(), "warm_temp_c": WARM_TEMP, "effect_pp_day_ahead": WEATHER_EFFECT,
@@ -1095,7 +1155,8 @@ coef = {
     "incident": {"K_incident": pm.K_incident, "hours_after_post": 3, "source": "https://t.me/s/DtOperativno"},
     "traffic": {"K_traffic_by_score": ProfileModel(**BEST, use_traffic=True).fit(df, CUTOFF).K_traffic, "in_submission": TRAFFIC_IN_MODEL,
                 "source": "https://t.me/s/DtOperativno ; онлайн — https://export.yandex.ru/bar/reginfo.xml?region=213"},
-    "expert": {"K_PRE_NEW_YEAR": K_PRE_NEW_YEAR, "K_SEASON": K_SEASON},
+    "expert": {"K_PRE_NEW_YEAR": K_PRE_NEW_YEAR if K_PRE_NEW_YEAR is not None else pm.K_pre_ny,
+               "K_PRE_NEW_YEAR_source": "аналог: 9–10.01.2025 к будням следующих недель", "K_SEASON": K_SEASON},
     "ui_sliders": {"weather": [0.8, 1.2], "event": [0.0, 1.5], "season": [0.8, 1.2], "traffic": [0.9, 1.1], "fleet": [0.5, 1.5]},
 }
 def json_safe(o):
@@ -1116,7 +1177,7 @@ for nm, m in zip(ml_names, pm.ml_models):
 json.dump({"model_version": stamp, "models": ml_names, "seeds": list(ML_SEEDS),
            "features": ML_FEATS, "categorical": {"route": list(ROUTE_DTYPE.categories)},
            "target": "boardings / prof (профиль модели 1), вес prof; прогноз = prof × clip(mean(models), 0.3, 2.0)",
-           "anchor_level": ML_ANCHOR_LEVEL, "blend": f"pred = {1 - BLEND_W:.1f}·prof + {BLEND_W:.1f}·ML", "profile_config": BEST,
+           "anchor_level": ML_ANCHOR_LEVEL, "blend": f"pred = (1−w)·prof + w·ML, w = {BLEND['w_near']} на днях 1–{BLEND['h_cut']}, {BLEND['w_far']} дальше", "profile_config": BEST,
            "origins_step_days": ORIGIN_STEP_DAYS, "train_horizons_days": list(ML_HORIZONS), "tech_hours_zero": list(TECH_HOURS),
            "versions": {"lightgbm": lgb.__version__, "pandas": pd.__version__, "numpy": np.__version__, "python": sys.version.split()[0]}},
           open(ART / "ml_contract.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1, default=str)

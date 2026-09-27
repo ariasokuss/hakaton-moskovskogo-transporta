@@ -1,12 +1,40 @@
 import { useEffect, useRef, useState } from 'react'
 import maplibregl from 'maplibre-gl'
 import type { GeoJSONSource, LngLatBoundsLike, MapLayerMouseEvent } from 'maplibre-gl'
+import { isTooDark, routeColor } from '../routeColor'
 import type { Route } from '../api'
 
-// Бесплатная подложка без ключа (OpenFreeMap, данные OpenStreetMap).
-const STYLE = 'https://tiles.openfreemap.org/styles/positron'
+// Бесплатная подложка без ключа (OpenFreeMap, данные OpenStreetMap): светлая и тёмная под тему интерфейса.
+const STYLE = { light: 'https://tiles.openfreemap.org/styles/positron', dark: 'https://tiles.openfreemap.org/styles/dark' }
+const INK = { light: { text: '#1c2430', halo: '#ffffff', sel: '#1c2430', casing: 'rgba(255,255,255,0.95)' },
+              dark: { text: '#eef2f6', halo: '#2b3036', sel: '#ffffff', casing: 'rgba(255,255,255,0.5)' } }
 
 type Geo = { type: 'FeatureCollection'; features: any[] }
+
+// Тёмная подложка OpenFreeMap почти чёрная (фон rgb 12). В тёмной теме перекрашиваем её в графит:
+// серый фон, дороги и здания светлее фона, вода и парки приглушены, подписи читаемые.
+const GRAPHITE = { bg: '#30353c', res: '#343a41', water: '#262b32', park: '#323b35', building: '#3b414a',
+  road: '#474e58', major: '#545c67', casing: '#5f6874', rail: '#4a515b', label: '#b3bcc7', halo: '#2b3036', boundary: '#5a626d' }
+function graphite(m: maplibregl.Map) {
+  const set = (id: string, prop: string, v: string) => { try { m.setPaintProperty(id, prop, v) } catch { /* слоя нет в стиле */ } }
+  for (const l of m.getStyle().layers ?? []) {
+    const id = l.id
+    if (l.type === 'background') set(id, 'background-color', GRAPHITE.bg)
+    else if (l.type === 'fill') {
+      const c = /water/.test(id) ? GRAPHITE.water : /park|wood|grass/.test(id) ? GRAPHITE.park
+        : /building/.test(id) ? GRAPHITE.building : /residential|landuse|landcover/.test(id) ? GRAPHITE.res : GRAPHITE.bg
+      set(id, 'fill-color', c)
+      if (/building/.test(id)) set(id, 'fill-outline-color', GRAPHITE.road)
+    } else if (l.type === 'line') {
+      const c = /water/.test(id) ? GRAPHITE.water : /casing/.test(id) ? GRAPHITE.casing : /rail/.test(id) ? GRAPHITE.rail
+        : /boundary/.test(id) ? GRAPHITE.boundary : /major|motorway|trunk|primary/.test(id) ? GRAPHITE.major : GRAPHITE.road
+      set(id, 'line-color', c)
+    } else if (l.type === 'symbol') {
+      set(id, 'text-color', GRAPHITE.label)
+      set(id, 'text-halo-color', GRAPHITE.halo)
+    }
+  }
+}
 
 /**
  * Карта сети. Трассы окрашены цветом маршрута, номер маршрута подписан вдоль
@@ -16,12 +44,14 @@ type Geo = { type: 'FeatureCollection'; features: any[] }
  * Динамика по точкам маршрута: размер кружка остановки — прогноз посадок на ней
  * в выбранный час (stopValues, пасс./ч), час двигается ползунком под картой.
  */
-export function MapView({ geo, routes, selected, onSelect, stopValues, hourLabel, selectedStop, onSelectStop }: {
-  geo: Geo | null; routes: Route[]; selected: number | null; onSelect: (id: number | null) => void
+// Тема задаётся при создании карты: при смене темы App пересоздаёт карту (key), слои добавляются заново.
+export function MapView({ geo, routes, selected, onSelect, stopValues, hourLabel, selectedStop, onSelectStop, dark = false }: {
+  geo: Geo | null; routes: Route[]; selected: number | null; onSelect: (id: number | null) => void; dark?: boolean
   stopValues: Record<string, number>; hourLabel: string
   selectedStop: string | null; onSelectStop: (name: string | null) => void
 }) {
   const box = useRef<HTMLDivElement>(null)
+  const ink = INK[dark ? 'dark' : 'light']
   const map = useRef<maplibregl.Map | null>(null)
   const ready = useRef(false)
   const [layersReady, setLayersReady] = useState(false)
@@ -35,10 +65,13 @@ export function MapView({ geo, routes, selected, onSelect, stopValues, hourLabel
   labelRef.current = hourLabel
 
   useEffect(() => {
-    const m = new maplibregl.Map({ container: box.current!, style: STYLE, center: [37.62, 55.76], zoom: 10.3, attributionControl: { compact: true } })
+    const m = new maplibregl.Map({ container: box.current!, style: STYLE[dark ? 'dark' : 'light'], center: [37.62, 55.76], zoom: 10.3, attributionControl: { compact: true } })
     m.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
     // Слои добавляются, как только готов стиль, — не дожидаясь всех тайлов подложки (медленная сеть на демо).
-    m.once('style.load', () => { ready.current = true; pending.current?.(); pending.current = null })
+    m.once('style.load', () => {
+      if (dark) graphite(m)
+      ready.current = true; pending.current?.(); pending.current = null
+    })
     map.current = m
     return () => { m.remove(); map.current = null; ready.current = false }
   }, [])
@@ -50,10 +83,13 @@ export function MapView({ geo, routes, selected, onSelect, stopValues, hourLabel
     const apply = () => {
       const byId = new Map(routes.map(r => [r.id, r]))
       const tracks = { type: 'FeatureCollection', features: geo.features.filter(f => f.properties.kind === 'track').map(f => ({
-        ...f, properties: { ...f.properties, color: byId.get(f.properties.routeId)?.color ?? '#888', label: byId.get(f.properties.routeId)?.shortName ?? '' },
+        ...f, properties: { ...f.properties, color: routeColor(byId.get(f.properties.routeId)?.color ?? '#888', dark), label: byId.get(f.properties.routeId)?.shortName ?? '',
+          ink: dark && isTooDark(byId.get(f.properties.routeId)?.color ?? '') ? '#1b2230' : '#fff' },
       })) }
       stopsBase.current = geo.features.filter(f => f.properties.kind === 'stop').map(f => ({
-        ...f, properties: { ...f.properties, transfer: f.properties.routes.length > 1, routeList: f.properties.routes.join(', ') },
+        ...f, properties: { ...f.properties, transfer: f.properties.routes.length > 1, routeList: f.properties.routes.join(', '),
+          // Цвет кружка — цвет линии маршрута; у пересадочной — первого маршрута (при выборе маршрута — его цвет).
+          color: routeColor(byId.get(f.properties.routes[0])?.color ?? '#888', dark) },
       }))
       const stops = { type: 'FeatureCollection', features: stopsBase.current }
       if (m.getSource('tracks')) {
@@ -63,6 +99,9 @@ export function MapView({ geo, routes, selected, onSelect, stopValues, hourLabel
       }
       m.addSource('tracks', { type: 'geojson', data: tracks as any })
       m.addSource('stops', { type: 'geojson', data: stops as any })
+      // Светлая обводка трасс: тёмные цвета маршрутов (50 — #2D3142) читаются и на тёмной подложке.
+      m.addLayer({ id: 'tracks-casing', type: 'line', source: 'tracks', layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': ink.casing, 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 4.5, 15, 9] } })
       m.addLayer({ id: 'tracks', type: 'line', source: 'tracks', layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: { 'line-color': ['get', 'color'], 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 2.5, 15, 6], 'line-opacity': 0.9 } })
       // Выбранный маршрут — отдельный слой с фильтром: выбор меняет фильтр, а не data-driven стиль,
@@ -78,16 +117,17 @@ export function MapView({ geo, routes, selected, onSelect, stopValues, hourLabel
           'circle-radius': ['interpolate', ['linear'], ['zoom'],
             10, ['+', 1.5, ['*', 6, ['coalesce', ['get', 'v'], 0]]],
             14, ['+', 3, ['*', 16, ['coalesce', ['get', 'v'], 0]]]],
-          'circle-color': ['case', ['boolean', ['get', 'sel'], false], '#1c2430', 'rgba(47,111,219,0.45)'],
-          'circle-stroke-color': '#fff', 'circle-stroke-width': ['case', ['get', 'transfer'], 1.5, 0.8] } })
+          'circle-color': ['case', ['boolean', ['get', 'sel'], false], ink.sel, ['get', 'color']],
+          'circle-opacity': 0.8,
+          'circle-stroke-color': ink.halo, 'circle-stroke-width': ['case', ['get', 'transfer'], 1.5, 0.8] } })
       m.addLayer({ id: 'stop-labels', type: 'symbol', source: 'stops', minzoom: 13.5,
         layout: { 'text-field': ['get', 'name'], 'text-size': 11, 'text-offset': [0, 1.3], 'text-anchor': 'top', 'text-font': ['Noto Sans Regular'] },
-        paint: { 'text-color': '#1c2430', 'text-halo-color': '#fff', 'text-halo-width': 1.4 } })
+        paint: { 'text-color': ink.text, 'text-halo-color': ink.halo, 'text-halo-width': 1.4 } })
       // Номер маршрута вдоль линии — однозначное обозначение при любом масштабе.
       m.addLayer({ id: 'track-labels', type: 'symbol', source: 'tracks',
         layout: { 'symbol-placement': 'line', 'symbol-spacing': 260, 'text-field': ['get', 'label'], 'text-size': 13,
           'text-font': ['Noto Sans Bold'], 'text-keep-upright': true },
-        paint: { 'text-color': '#fff', 'text-halo-color': ['get', 'color'], 'text-halo-width': 3 } })
+        paint: { 'text-color': ['get', 'ink'], 'text-halo-color': ['get', 'color'], 'text-halo-width': 3 } })
       m.on('click', 'tracks-hit', (e: MapLayerMouseEvent) => {
         if (m.queryRenderedFeatures(e.point, { layers: ['stops'] }).length) return   // клик по остановке важнее
         onSelectRef.current(e.features?.[0]?.properties?.routeId ?? null)
@@ -129,6 +169,7 @@ export function MapView({ geo, routes, selected, onSelect, stopValues, hourLabel
     if (!m || !layersReady || !m.getLayer('tracks')) return
     const sel: any = selected == null ? null : ['==', ['get', 'routeId'], selected]
     m.setPaintProperty('tracks', 'line-opacity', sel ? 0.18 : 0.9)
+    m.setPaintProperty('tracks-casing', 'line-opacity', sel ? 0.25 : 1)
     m.setFilter('tracks-sel', sel ?? ['==', ['get', 'routeId'], -1])
     m.setLayoutProperty('track-labels', 'visibility', 'visible')
     m.setFilter('track-labels', sel)
@@ -136,11 +177,14 @@ export function MapView({ geo, routes, selected, onSelect, stopValues, hourLabel
     const onRoute: any = selected == null ? null : ['in', `, ${selected},`, ['concat', ', ', ['get', 'routeList'], ',']]
     m.setFilter('stops', onRoute)
     m.setFilter('stop-labels', onRoute)
+    const sc = selected == null ? null : routes.find(r => r.id === selected)?.color
+    const selColor = sc ? routeColor(sc, dark) : null
+    m.setPaintProperty('stops', 'circle-color', ['case', ['boolean', ['get', 'sel'], false], ink.sel, selColor ?? ['get', 'color']])
     if (geo && selected != null) {
       const fs = geo.features.filter(f => f.properties.kind === 'track' && f.properties.routeId === selected)
       if (fs.length) m.fitBounds(bounds(fs), { padding: 60, duration: 500 })
     }
-  }, [selected, geo, layersReady])
+  }, [selected, geo, routes, layersReady])
 
   return <div ref={box} className="map" />
 }

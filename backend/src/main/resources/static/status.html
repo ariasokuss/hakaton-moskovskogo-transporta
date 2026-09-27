@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Статус Пантографа</title>
+  <link rel="stylesheet" href="/pages.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect width=%2216%22 height=%2216%22 rx=%223%22 fill=%22%232f6fdb%22/%3E%3Cpath d=%22M4 12 8 4l4 8%22 stroke=%22white%22 stroke-width=%222%22 fill=%22none%22/%3E%3C/svg%3E">
+  <style>
+    .hero { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+    .big { font: 700 28px var(--font); padding: 8px 18px; border-radius: 10px; }
+    .big.up { background: var(--ok-bg); color: var(--ok); }
+    .big.down { background: var(--bad-bg); color: var(--bad); }
+    .big.wait { background: var(--bg); color: var(--muted); }
+    .hero p { margin: 0; }
+    details summary { cursor: pointer; color: var(--muted); }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">Пантограф · статус<small>ИИ-прогноз загрузки трамвайных маршрутов</small></div>
+    <nav>
+      <a href="/">API</a>
+      <a class="on" href="/actuator/health">Статус сервиса</a>
+      <a id="site" href="#">Рабочее место диспетчера →</a>
+    </nav>
+  </header>
+
+  <section class="panel hero">
+    <span id="state" class="big wait">…</span>
+    <div>
+      <p id="summary">Проверка…</p>
+      <p class="muted small">Обновляется каждые 10 с · <span id="checked"></span> · для программ этот адрес отдаёт JSON Spring Boot Actuator</p>
+    </div>
+  </section>
+
+  <h2>Данные в сервисе</h2>
+  <div class="facts" id="data"></div>
+
+  <h2>Компоненты</h2>
+  <section class="panel scroll"><table id="components"></table></section>
+
+  <h2>Внешние источники (схема external)</h2>
+  <section class="panel scroll"><table id="sources"><tr><td class="muted">Загрузка…</td></tr></table></section>
+
+  <details class="panel"><summary>Ответ /actuator/health целиком</summary><pre class="json" id="raw"></pre></details>
+</div>
+
+<script src="/pages.js"></script>
+<script>
+document.getElementById('site').href = `${location.protocol}//${location.hostname}:3000/`
+const NAMES = { forecastData: 'Прогноз и факт в памяти', r2dbc: 'PostgreSQL (R2DBC)', diskSpace: 'Диск',
+  livenessState: 'Живость', readinessState: 'Готовность', ping: 'Ping', ssl: 'SSL-сертификаты' }
+const fact = (k, v) => `<div class="fact"><div class="k">${esc(k)}</div><div class="v">${esc(v ?? '—')}</div></div>`
+const fmtTime = t => t ? new Date(t).toLocaleString('ru-RU') : '—'
+
+function describe(name, c) {
+  const d = c.details || {}
+  if (name === 'forecastData') return `маршрутов ${d.routes}, дней факта ${d.actualDays}${d.startupError ? ' · ошибка старта: ' + d.startupError : ''}`
+  if (name === 'r2dbc') return `${d.database || ''} ${d.validationQuery ? '· ' + d.validationQuery : ''}`
+  if (name === 'diskSpace') return `свободно ${(d.free / 2 ** 30).toFixed(0)} из ${(d.total / 2 ** 30).toFixed(0)} ГБ`
+  return ''
+}
+
+async function refresh() {
+  let h
+  try {
+    const r = await fetch('/actuator/health', { headers: { Accept: 'application/json' }, cache: 'no-store' })
+    h = await r.json()
+  } catch (e) {
+    document.getElementById('state').className = 'big down'
+    document.getElementById('state').textContent = 'НЕТ СВЯЗИ'
+    document.getElementById('summary').textContent = 'Бэкенд не отвечает: ' + e.message
+    return
+  }
+  const up = h.status === 'UP'
+  const st = document.getElementById('state')
+  st.className = 'big ' + (up ? 'up' : 'down')
+  st.textContent = up ? 'РАБОТАЕТ' : 'НЕ ГОТОВ'
+  const fd = h.components?.forecastData?.details || {}
+  document.getElementById('summary').innerHTML = up
+    ? `Сервис готов к выдаче. Прогон модели <code>${esc(fd.shortTermRun ?? '—')}</code>.`
+    : `Статус <b>${esc(h.status)}</b>${fd.status ? ': ' + esc(fd.status) : ''} — идёт загрузка данных при старте или сбой, см. компоненты ниже.`
+  document.getElementById('checked').textContent = 'проверено ' + new Date().toLocaleTimeString('ru-RU')
+  document.getElementById('components').innerHTML = '<tr><th>Компонент</th><th>Статус</th><th>Подробности</th></tr>' +
+    Object.entries(h.components || {}).map(([n, c]) => `<tr><td>${esc(NAMES[n] || n)}</td>
+      <td><span class="pill ${c.status === 'UP' ? 'up' : 'down'}">${esc(c.status)}</span></td><td class="small">${esc(describe(n, c))}</td></tr>`).join('')
+  document.getElementById('raw').innerHTML = highlight(h)
+
+  try {
+    const [m, ext] = await Promise.all([getJson('/api/meta'), getJson('/api/external')])
+    document.getElementById('data').innerHTML =
+      fact('Маршрутов', m.routes) +
+      fact('Факт (история)', m.actualFrom ? `${m.actualFrom} — ${m.actualTo}` : 'нет') +
+      fact('Почасовой прогноз', m.shortTerm ? `${m.shortTerm.from} — ${m.shortTerm.to}` : 'нет') +
+      fact('Версия модели', m.shortTerm?.modelVersion) +
+      fact('Годовой прогноз', m.year ? `${m.year.from} — ${m.year.to}` : 'нет') +
+      fact('Последний балл пробок', ext.trafficLatest ? `${ext.trafficLatest.score} б. · ${fmtTime(ext.trafficLatest.measuredAt)}` : 'нет')
+    document.getElementById('sources').innerHTML = '<tr><th>Источник</th><th>Статус</th><th>Строк</th><th>Загружено</th><th>Ссылка</th></tr>' +
+      ext.sources.map(s => `<tr><td class="mono">${esc(s.source)}</td>
+        <td><span class="pill ${s.status === 'succeeded' ? 'up' : 'down'}">${esc(s.status)}</span>${s.error ? `<div class="small muted">${esc(s.error)}</div>` : ''}</td>
+        <td class="mono">${s.rows ?? '—'}</td><td class="small">${fmtTime(s.fetchedAt)}</td>
+        <td class="small">${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noreferrer">${esc(s.url.replace(/^https?:\/\//, ''))}</a>` : '—'}</td></tr>`).join('')
+  } catch (e) {
+    document.getElementById('sources').innerHTML = `<tr><td class="muted">API данных пока недоступно: ${esc(e.message)}</td></tr>`
+  }
+}
+refresh()
+setInterval(refresh, 10000)
+</script>
+</body>
+</html>

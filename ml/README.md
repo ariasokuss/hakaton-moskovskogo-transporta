@@ -6,7 +6,8 @@
 | Что | Где |
 |---|---|
 | Инструкция запуска, параметры, чекпоинты | [`ML_README.md`](../mostrans_handoff/mostrans/ML_README.md) |
-| Ноутбук обучения и инференса (Colab) | [`baseline_colab.ipynb`](../mostrans_handoff/mostrans/baseline_colab.ipynb), исходник — [`tools/build_nb.py`](../mostrans_handoff/mostrans/tools/build_nb.py) |
+| **Финальный ноутбук обучения и инференса (Colab)** | [`pantograph_best_colab.ipynb`](../mostrans_handoff/mostrans/pantograph_best_colab.ipynb), исходник — [`tools/build_nb_best.py`](../mostrans_handoff/mostrans/tools/build_nb_best.py): профиль + LightGBM, режимы маршрутов, внешние поправки, проверка гипотез на валидации, сезонный рост уровня `SEASON_GROWTH = 1.03`; лидерборд **0.89731** |
+| Предыдущая версия ноутбука | [`baseline_colab.ipynb`](../mostrans_handoff/mostrans/baseline_colab.ipynb), исходник — [`tools/build_nb.py`](../mostrans_handoff/mostrans/tools/build_nb.py) |
 | **Прогнанный ноутбук финального прогона** (код тот же, с выводами: CV по фолдам, ablation источников, тест на утечку, потоковый бэктест) | [`notebooks_extended/baseline_colab (10).ipynb`](../mostrans_handoff/mostrans/notebooks_extended/) — прогон `20260926_1142`, CV 0.8921, **лидерборд 0.89234** |
 | Пайплайн приёма сырых валидаций (DuckDB, сверка с labels) | [`pipeline/ingest_raw.py`](../mostrans_handoff/mostrans/pipeline/ingest_raw.py) |
 | Внешние данные и скрипты их получения | [`external_data/`](../mostrans_handoff/mostrans/external_data/), описание — [`EXTERNAL_DATA.md`](../mostrans_handoff/mostrans/EXTERNAL_DATA.md) |
@@ -25,6 +26,5 @@ models = [lgb.Booster(model_file=f"ml/artifacts/{m}") for m in c["models"]]
 ```
 
 Сервис модель не вызывает: прогноз предрассчитан ноутбуком и импортируется как прогон
-(`tools/sync_ml_artifacts.sh <service_artifacts.zip>` → `docker compose restart backend`). Архив создаётся ноутбуком вне Git; в репозитории уже лежат распакованные финальные артефакты.
+(`tools/sync_ml_artifacts.sh <service_artifacts.zip>` → `docker compose restart backend`).
 Контракт между контурами — `ml_contract.json` и формат `route;date;hour;pred;model_version`.
-

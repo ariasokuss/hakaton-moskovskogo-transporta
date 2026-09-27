@@ -12,7 +12,9 @@ java {
 }
 
 repositories {
-    maven("https://maven-central.storage-download.googleapis.com/maven2/")   // зеркало Maven Central (см. settings.gradle.kts)
+    // Официальное зеркало Maven Central (Google Cloud Storage) — первым: при 403 от repo.maven.apache.org
+    // Gradle не переходит к следующему репозиторию, а зеркало отдаёт те же артефакты.
+    maven("https://maven-central.storage-download.googleapis.com/maven2/")
     mavenCentral()
 }
 
@@ -24,6 +26,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-flyway")
     implementation("org.flywaydb:flyway-database-postgresql")
     implementation("org.dhatim:fastexcel:0.20.2")
+    implementation("com.github.librepdf:openpdf:2.0.3")   // PDF-отчёт диспетчера (export/PdfReport)
     runtimeOnly("org.postgresql:r2dbc-postgresql")
     runtimeOnly("org.postgresql:postgresql")
     testImplementation("org.springframework.boot:spring-boot-starter-test")

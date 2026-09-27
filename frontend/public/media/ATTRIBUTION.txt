@@ -1,0 +1,9 @@
+tram-parade.mp4, tram-parade-poster.jpg — фрагмент (06:34–06:58, 1280×720, без звука) видео
+«Tram parade in Moscow, 2018 (night).webm» — ночной парад трамваев, Москва, 2018
+Автор: trolleway. Источник: Wikimedia Commons
+https://commons.wikimedia.org/wiki/File:Tram_parade_in_Moscow,_2018_(night).webm
+Лицензия: CC BY 3.0 — https://creativecommons.org/licenses/by/3.0/
+Изменения: вырезан фрагмент, шумоподавление, лёгкая цветокоррекция, убран звук, затемнения в начале и конце.
+Подпись с автором и лицензией — README, раздел «Материалы третьих сторон».
+
+favicon.png, logo.png — логотип «Пантограф» (logo/ в корне репозитория).

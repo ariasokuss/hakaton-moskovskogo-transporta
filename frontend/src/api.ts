@@ -18,6 +18,17 @@ export type ExternalDay = {
   dayType: string | null; dayOff: boolean; holidayName: string | null; schoolHoliday: boolean
   tempMin: number | null; tempMax: number | null; precipitationMm: number | null; snowfallCm: number | null; weatherKind: string | null
 }
+export type TrafficHour = { hour: number; score: number; url: string }
+export type PeriodContext = {
+  from: string; to: string; days: number
+  calendar: { coveredDays: number; workdays: number; daysOff: number; schoolHolidayDays: number
+    holidays: { date: string; name: string }[]; workingWeekends: string[] }
+  weather: { coveredDays: number; tempMin?: number; tempMax?: number; precipitationMm?: number
+    rainyDays?: number; heavyDays?: number; snowDays?: number; frostDays?: number }
+  traffic: { coveredDays: number; jamDays: number; maxScore?: number; maxScoreDay?: string }
+  eventCounts: Record<string, number>
+  events: ExternalEvent[]
+}
 export type ExternalEvent = { from: string; to: string | null; category: string; routes: number[]; title: string | null; url: string }
 export type Dashboard = {
   date: string; dayOfWeek: number
@@ -25,11 +36,11 @@ export type Dashboard = {
   model: { modelVersion: string; horizon: string; from: string; to: string } | null
   routes: Route[]; series: RouteSeries[]; attention: Attention[]; regimes: Regime[]
   network: { forecastTotal: number; baselineTotal: number; deviationPct: number }
-  external?: { day: ExternalDay | null; events: ExternalEvent[] } | null
+  external?: { day: ExternalDay | null; events: ExternalEvent[]; traffic?: TrafficHour[] } | null
 }
 export type Period = { from: string; to: string; modelVersion: string }
 export type Meta = {
-  actualFrom: string; actualTo: string; defaultDate: string
+  actualFrom: string; actualTo: string; defaultDate: string; routes?: number
   shortTerm: Period | null
   year: Period | null
 }

@@ -31,6 +31,8 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import ru.mttech.tram.config.AppProperties;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Приём внешних источников в отдельную схему {@code external.*}.
@@ -59,16 +61,25 @@ public class ExternalDataService {
     public record Event(LocalDate from, LocalDate to, String category, List<Integer> routes, String title, String url) {}
 
     /** Неизменяемый снимок для выдачи: запросы к API в БД не ходят. */
-    public record Snapshot(Map<LocalDate, Day> days, List<Event> events, List<Map<String, Object>> sources) {
-        static Snapshot empty() { return new Snapshot(Map.of(), List.of(), List.of()); }
+    /**
+     * Балл пробок ЦОДД за час (0–10), фактический. Для диспетчера — контекст суток, в прогноз не входит:
+     * эффект не подтверждён ни в ML-проверке, ни как оперативная поправка (docs/traffic-operational-test.md).
+     */
+    public record TrafficHour(int hour, int score, String url) {}
+
+    public record Snapshot(Map<LocalDate, Day> days, List<Event> events, List<Map<String, Object>> sources,
+                           Map<LocalDate, List<TrafficHour>> traffic) {
+        static Snapshot empty() { return new Snapshot(Map.of(), List.of(), List.of(), Map.of()); }
     }
 
     private final DatabaseClient db;
     private final AppProperties props;
     private final HttpClient http;
+    private final ObjectMapper json;
     private volatile Snapshot snapshot = Snapshot.empty();
 
-    public ExternalDataService(DatabaseClient db, AppProperties props) {
+    public ExternalDataService(DatabaseClient db, AppProperties props, ObjectMapper json) {
+        this.json = json;
         this.db = db;
         this.props = props;
         this.http = HttpClient.newBuilder().connectTimeout(props.external().timeout()).build();
@@ -112,8 +123,13 @@ public class ExternalDataService {
         loadOnce("telegram-incidents", "external.event", "source = 'telegram-incidents'",
                 () -> loadIncidents(dir.resolve("tram_incidents_2025.csv")));
         loadOnce("codd-telegram", "external.traffic_score", "source = 'codd-telegram'",
-                () -> loadTrafficScores(dir.resolve("DtOperativno_traffic_scores_2025.csv"))
-                        + loadTrafficScores(dir.resolve("traffic_scores_2025.csv")));
+                () -> {
+                    Map<Long, String> texts = new HashMap<>();
+                    readPostTexts(dir.resolve("DtOperativno_posts_raw.jsonl"), texts);
+                    readPostTexts(dir.resolve("deptrans_posts_raw.jsonl"), texts);
+                    return loadTrafficScores(dir.resolve("DtOperativno_traffic_scores_2025.csv"), texts)
+                            + loadTrafficScores(dir.resolve("traffic_scores_2025.csv"), texts);
+                });
     }
 
     /** Идемпотентно: источник грузится, только если его строк в таблице ещё нет. */
@@ -207,17 +223,61 @@ public class ExternalDataService {
             "foreign_vehicle", "автомобиль на путях",
             "other", "сбой движения");
 
-    int loadTrafficScores(Path p) {
+    int loadTrafficScores(Path p, Map<Long, String> texts) {
         if (!Files.exists(p)) return 0;
         List<Map<String, String>> rows = readCsv(p);
-        Flux.fromIterable(rows).concatMap(r -> db.sql("""
-                        INSERT INTO external.traffic_score (measured_at, score, kind, source, source_url)
-                        VALUES (:t, :s, :k, 'codd-telegram', :u) ON CONFLICT DO NOTHING""")
-                .bind("t", publishedAt(r.get("date"), r.get("hour")))
-                .bind("s", Short.parseShort(r.get("score")))
-                .bind("k", "forecast".equals(r.get("kind")) ? "forecast" : "fact")
-                .bind("u", r.get("url")).then()).blockLast();
+        Flux.fromIterable(rows).concatMap(r -> {
+            long postId = Long.parseLong(r.get("post_id"));
+            String text = texts.get(postId);
+            var spec = db.sql("""
+                            INSERT INTO external.traffic_score (measured_at, score, kind, source, source_url, post_id, post_text)
+                            VALUES (:t, :s, :k, 'codd-telegram', :u, :pid, :txt) ON CONFLICT DO NOTHING""")
+                    .bind("t", publishedAt(r.get("date"), r.get("hour")))
+                    .bind("s", Short.parseShort(r.get("score")))
+                    .bind("k", "forecast".equals(r.get("kind")) ? "forecast" : "fact")
+                    .bind("u", r.get("url")).bind("pid", postId);
+            return (text == null ? spec.bindNull("txt", String.class) : spec.bind("txt", text)).then();
+        }).blockLast();
         return rows.size();
+    }
+
+    /** Тексты постов Telegram из выгрузки парсера (jsonl: id, text, url) — для окна «Пробки». */
+    private void readPostTexts(Path p, Map<Long, String> out) {
+        if (!Files.exists(p)) return;
+        try (BufferedReader r = Files.newBufferedReader(p, StandardCharsets.UTF_8)) {
+            String line;
+            while ((line = r.readLine()) != null) {
+                if (line.isBlank()) continue;
+                JsonNode n = json.readTree(line);
+                if (n.hasNonNull("id") && n.hasNonNull("text")) out.put(n.get("id").asLong(), n.get("text").asString());
+            }
+        } catch (IOException e) {
+            log.warn("Тексты постов {} не прочитаны: {}", p.getFileName(), e.getMessage());
+        }
+    }
+
+    /** Баллы пробок за сутки с адаптированными текстами постов — окно «Пробки» на экране диспетчера. */
+    public List<Map<String, Object>> trafficDay(LocalDate date) {
+        OffsetDateTime from = date.atStartOfDay(MSK).toOffsetDateTime(), to = date.plusDays(1).atStartOfDay(MSK).toOffsetDateTime();
+        return db.sql("""
+                SELECT measured_at, score, kind, source, source_url, post_text FROM external.traffic_score
+                WHERE measured_at >= :f AND measured_at < :t ORDER BY measured_at, kind""")
+                .bind("f", from).bind("t", to)
+                .map((r, m) -> {
+                    Map<String, Object> o = new LinkedHashMap<>();
+                    var t = r.get("measured_at", OffsetDateTime.class).atZoneSameInstant(MSK);
+                    o.put("hour", t.getHour());
+                    o.put("score", ((Number) r.get("score")).intValue());
+                    o.put("kind", r.get("kind", String.class));
+                    o.put("source", r.get("source", String.class));
+                    o.put("url", r.get("source_url", String.class));
+                    TrafficPosts.Parsed p = TrafficPosts.parse(r.get("post_text", String.class));
+                    o.put("text", p.text());
+                    o.put("speedKmh", p.speedKmh());
+                    o.put("forecastScore", p.forecastScore());
+                    o.put("spots", p.spots());
+                    return o;
+                }).all().collectList().block();
     }
 
     private reactor.core.publisher.Mono<Void> insertEvent(OffsetDateTime published, LocalDate from, LocalDate to, String category,
@@ -319,7 +379,22 @@ public class ExternalDataService {
                     return s;
                 }).all().collectList().block();
 
-        snapshot = new Snapshot(Map.copyOf(days), List.copyOf(events), List.copyOf(sources));
+        // Баллы пробок по суткам (МСК): последний пост за час, часы по возрастанию.
+        Map<LocalDate, java.util.TreeMap<Integer, TrafficHour>> byDay = new HashMap<>();
+        db.sql("""
+                SELECT measured_at, score, source_url FROM external.traffic_score
+                WHERE kind = 'fact' AND source = 'codd-telegram' ORDER BY measured_at""")
+                .map((r, m) -> {
+                    var t = r.get("measured_at", OffsetDateTime.class).atZoneSameInstant(MSK);
+                    return new Object[]{t.toLocalDate(), new TrafficHour(t.getHour(), ((Number) r.get("score")).intValue(),
+                            r.get("source_url", String.class))};
+                }).all().toIterable()
+                .forEach(o -> byDay.computeIfAbsent((LocalDate) o[0], k -> new java.util.TreeMap<>())
+                        .put(((TrafficHour) o[1]).hour(), (TrafficHour) o[1]));
+        Map<LocalDate, List<TrafficHour>> traffic = new HashMap<>();
+        byDay.forEach((d, m) -> traffic.put(d, List.copyOf(m.values())));
+
+        snapshot = new Snapshot(Map.copyOf(days), List.copyOf(events), List.copyOf(sources), Map.copyOf(traffic));
         log.info("Внешние источники в памяти: {} дней календаря/погоды, {} событий с датами, {} источников",
                 days.size(), events.size(), sources.size());
     }
@@ -334,6 +409,92 @@ public class ExternalDataService {
                 // Годовые «фоновые» посты (весь год) не информативны для конкретных суток.
                 .filter(e -> e.to() == null || e.to().toEpochDay() - e.from().toEpochDay() < 60)
                 .limit(20).toList());
+        out.put("traffic", s.traffic().getOrDefault(date, List.of()));
+        return out;
+    }
+
+    /**
+     * Внешние факторы за период (месяц, год) — сводка вместо контекста одних суток: состав календаря
+     * и праздники, погода по дням с прогнозом, события и режимы, пересекающие период, дни с пробками.
+     * Покрытие каждого источника указывается явно: на будущие даты погоды и постов ещё нет.
+     */
+    public Map<String, Object> periodContext(LocalDate from, LocalDate to) {
+        Snapshot s = snapshot;
+        int total = (int) (to.toEpochDay() - from.toEpochDay() + 1);
+        int calDays = 0, work = 0, off = 0, school = 0, weatherDays = 0, rainy = 0, heavy = 0, snowy = 0, frost = 0;
+        double tmin = Double.POSITIVE_INFINITY, tmax = Double.NEGATIVE_INFINITY, prec = 0;
+        List<Map<String, Object>> holidays = new ArrayList<>();
+        List<LocalDate> workingWeekends = new ArrayList<>();
+        int trafficDays = 0, jamDays = 0, maxScore = -1;
+        LocalDate maxScoreDay = null;
+        for (LocalDate d = from; !d.isAfter(to); d = d.plusDays(1)) {
+            Day day = s.days().get(d);
+            if (day != null && day.dayType() != null) {
+                calDays++;
+                if (day.dayOff()) off++; else work++;
+                if (day.schoolHoliday()) school++;
+                if (day.holidayName() != null) holidays.add(Map.of("date", d, "name", day.holidayName()));
+                if ("working_weekend".equals(day.dayType())) workingWeekends.add(d);
+            }
+            if (day != null && day.tempMin() != null) {
+                weatherDays++;
+                tmin = Math.min(tmin, day.tempMin());
+                tmax = Math.max(tmax, day.tempMax());
+                double p = day.precipitationMm() == null ? 0 : day.precipitationMm();
+                prec += p;
+                if (p >= 1) rainy++;
+                if (p >= 10) heavy++;
+                if (day.snowfallCm() != null && day.snowfallCm() >= 1) snowy++;
+                if (day.tempMin() <= -10) frost++;
+            }
+            List<TrafficHour> th = s.traffic().get(d);
+            if (th != null && !th.isEmpty()) {
+                trafficDays++;
+                int m = th.stream().mapToInt(TrafficHour::score).max().orElse(0);
+                if (m >= 7) jamDays++;
+                if (m > maxScore) { maxScore = m; maxScoreDay = d; }
+            }
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("from", from);
+        out.put("to", to);
+        out.put("days", total);
+        Map<String, Object> cal = new LinkedHashMap<>();
+        cal.put("coveredDays", calDays);
+        cal.put("workdays", work);
+        cal.put("daysOff", off);
+        cal.put("schoolHolidayDays", school);
+        cal.put("holidays", holidays);
+        cal.put("workingWeekends", workingWeekends);
+        out.put("calendar", cal);
+        Map<String, Object> w = new LinkedHashMap<>();
+        w.put("coveredDays", weatherDays);
+        if (weatherDays > 0) {
+            w.put("tempMin", Math.round(tmin));
+            w.put("tempMax", Math.round(tmax));
+            w.put("precipitationMm", Math.round(prec));
+            w.put("rainyDays", rainy);
+            w.put("heavyDays", heavy);
+            w.put("snowDays", snowy);
+            w.put("frostDays", frost);
+        }
+        out.put("weather", w);
+        Map<String, Object> tr = new LinkedHashMap<>();
+        tr.put("coveredDays", trafficDays);
+        tr.put("jamDays", jamDays);
+        if (maxScoreDay != null) { tr.put("maxScore", maxScore); tr.put("maxScoreDay", maxScoreDay); }
+        out.put("traffic", tr);
+        List<Event> ev = s.events().stream()
+                .filter(e -> !e.from().isAfter(to) && !(e.to() == null ? e.from() : e.to()).isBefore(from))
+                .filter(e -> e.to() == null || e.to().toEpochDay() - e.from().toEpochDay() < 60)
+                .toList();
+        Map<String, Long> byCat = new java.util.TreeMap<>();
+        ev.forEach(e -> byCat.merge(e.category(), 1L, Long::sum));
+        out.put("eventCounts", byCat);
+        // Режимы и работы на путях — самые важные для выпуска, показываем первыми; сбои — только счётчиком.
+        out.put("events", ev.stream()
+                .sorted(java.util.Comparator.comparing((Event e) -> "tram_incident".equals(e.category())).thenComparing(Event::from))
+                .limit(12).toList());
         return out;
     }
 

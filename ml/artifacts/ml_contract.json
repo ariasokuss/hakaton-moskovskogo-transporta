@@ -1,5 +1,5 @@
 {
- "model_version": "20260926_1142",
+ "model_version": "20260927_1334",
  "models": [
   "lgbm_h3_s42.txt",
   "lgbm_h3_s43.txt",
@@ -32,7 +32,8 @@
   "lvl_wd20",
   "lag_w1",
   "lag_m4",
-  "in_regime"
+  "in_regime",
+  "hour_share"
  ],
  "categorical": {
   "route": [
@@ -49,7 +50,7 @@
  },
  "target": "boardings / prof (профиль модели 1), вес prof; прогноз = prof × clip(mean(models), 0.3, 2.0)",
  "anchor_level": true,
- "blend": "pred = 0.2·prof + 0.8·ML",
+ "blend": "pred = (1−w)·prof + w·ML, w = 0.6 на днях 1–21, 0.2 дальше",
  "profile_config": {
   "n_weeks": 16,
   "level_weeks": 3,

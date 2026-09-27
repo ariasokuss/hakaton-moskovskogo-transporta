@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>API Пантографа</title>
+  <link rel="stylesheet" href="/pages.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect width=%2216%22 height=%2216%22 rx=%223%22 fill=%22%232f6fdb%22/%3E%3Cpath d=%22M4 12 8 4l4 8%22 stroke=%22white%22 stroke-width=%222%22 fill=%22none%22/%3E%3C/svg%3E">
+  <style>
+    .intro { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 760px) { .intro { grid-template-columns: 1fr; } }
+    .intro p { margin: 4px 0; }
+    .ep-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+    .ep-path { font: 600 14px var(--mono); }
+    .ep-desc { color: var(--muted); }
+    .ep-run { display: flex; gap: 6px; margin-top: 10px; }
+    .ep-run input { flex: 1; min-width: 0; font: 13px var(--mono); padding: 8px 10px; border: 1px solid var(--line);
+                    border-radius: 8px; background: var(--bg); color: var(--ink); }
+    .ep-run button, .ep-run a { flex: none; font: 600 13px var(--font); padding: 8px 14px; border-radius: 8px; cursor: pointer;
+                                border: 1px solid var(--line); background: var(--panel); color: var(--ink); text-decoration: none; }
+    .ep-run button.go { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .result { margin-top: 8px; }
+    .meta { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+    .meta b.ok { color: var(--ok); } .meta b.err { color: var(--bad); }
+    .params td:first-child { white-space: nowrap; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">Пантограф · API<small>ИИ-прогноз загрузки трамвайных маршрутов</small></div>
+    <nav>
+      <a class="on" href="/">API</a>
+      <a href="/actuator/health">Статус сервиса</a>
+      <a id="site" href="#">Рабочее место диспетчера →</a>
+    </nav>
+  </header>
+
+  <div class="intro">
+    <section class="panel">
+      <p><b>REST API прогноза пассажиропотока</b> по сетке <code>маршрут × дата × час</code>. Прогноз предрассчитан
+        ML-моделью; день, месяц, год и произвольный интервал — агрегация часов.</p>
+      <p class="muted small">Эта страница — для людей. Программы на тех же адресах получают JSON
+        (браузер просит <code>Accept: text/html</code>, остальные — нет).</p>
+    </section>
+    <section class="panel">
+      <p><b>Ошибки</b> — <a href="https://www.rfc-editor.org/rfc/rfc9457" target="_blank" rel="noreferrer">RFC 9457</a>,
+        сообщения на русском, без стектрейсов. Попробуйте: <a href="#" data-try="/api/forecast?horizon=week">неизвестный горизонт</a>,
+        <a href="#" data-try="/api/dashboard?date=2027-01-01">дата вне прогноза</a>.</p>
+      <p class="muted small" id="scenario"></p>
+    </section>
+  </div>
+
+  <h2>Общие параметры прогноза</h2>
+  <section class="panel scroll">
+    <table class="params">
+      <tr><th>Параметр</th><th>Что задаёт</th></tr>
+      <tr><td><code>route</code></td><td>номер маршрута (список — <code>/api/routes</code>); без него — все маршруты</td></tr>
+      <tr><td><code>stop</code></td><td>остановка (список — <code>/api/stops?route=</code>): доля прогноза маршрута</td></tr>
+      <tr><td><code>horizon</code></td><td><code>day</code> — сутки по часам, <code>month</code> — месяц по дням, <code>year</code> — 12 месяцев</td></tr>
+      <tr><td><code>date</code> / <code>from</code>, <code>to</code></td><td>дата горизонта или произвольный интервал</td></tr>
+      <tr><td><code>granularity</code></td><td><code>hour</code> · <code>day</code> · <code>month</code> — детализация интервала</td></tr>
+      <tr><td><code>kWeather</code>, <code>kEvent</code>, <code>kSeason</code>, <code>kTraffic</code>, <code>kManual</code></td>
+          <td>корректирующие коэффициенты 0.3–3.0 (по умолчанию 1), применяются поверх прогноза модели</td></tr>
+    </table>
+  </section>
+
+  <h2>Методы</h2>
+  <div id="endpoints"><p class="muted">Загрузка…</p></div>
+</div>
+
+<script src="/pages.js"></script>
+<script>
+document.getElementById('site').href = `${location.protocol}//${location.hostname}:3000/`
+
+async function run(card) {
+  const url = card.querySelector('input').value.trim()
+  const method = card.dataset.method
+  const out = card.querySelector('.result')
+  out.innerHTML = '<p class="muted small">Запрос…</p>'
+  const t0 = performance.now()
+  try {
+    const r = await fetch(url, { method, headers: { Accept: 'application/json, text/csv, */*;q=0.1' }, cache: 'no-store' })
+    const ms = Math.round(performance.now() - t0)
+    const type = r.headers.get('content-type') || ''
+    let body, size
+    if (type.includes('json')) {
+      const text = await r.text(); size = text.length
+      body = `<pre class="json">${highlight(JSON.parse(text))}</pre>`
+    } else if (type.startsWith('text/')) {
+      const text = await r.text(); size = text.length
+      const lines = text.split('\n')
+      body = `<pre class="json">${esc(lines.slice(0, 40).join('\n'))}${lines.length > 40 ? esc(`\n… всего строк: ${lines.length - 1}`) : ''}</pre>`
+    } else {
+      const blob = await r.blob(); size = blob.size
+      const name = (r.headers.get('content-disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'file'
+      body = `<p><a href="${URL.createObjectURL(blob)}" download="${esc(name)}">Скачать ${esc(name)}</a></p>`
+    }
+    out.innerHTML = `<div class="meta"><b class="${r.ok ? 'ok' : 'err'}">HTTP ${r.status}</b><span>${ms} мс</span>
+      <span>${(size / 1024).toFixed(1)} КБ</span><span>${esc(type)}</span></div>${body}`
+  } catch (e) {
+    out.innerHTML = `<div class="meta"><b class="err">Нет ответа</b><span>${esc(e.message)}</span></div>`
+  }
+}
+
+getJson('/api').then(api => {
+  document.getElementById('scenario').textContent = 'Коэффициенты: ' + api.scenarioParams
+  document.getElementById('endpoints').innerHTML = api.endpoints.map(ep => `
+    <section class="panel ep" data-method="${ep.method}">
+      <div class="ep-head">
+        <span class="pill ${ep.method.toLowerCase()}">${ep.method}</span>
+        <span class="ep-path">${esc(ep.path)}</span>
+        <span class="ep-desc">${esc(ep.description)}</span>
+      </div>
+      <div class="ep-run">
+        <input value="${esc(decodeURI(ep.example))}" aria-label="Адрес запроса" spellcheck="false">
+        <button class="go">Выполнить</button>
+        ${ep.method === 'GET' ? `<a href="${esc(ep.example)}" target="_blank" rel="noreferrer">Открыть</a>` : ''}
+      </div>
+      <div class="result"></div>
+    </section>`).join('')
+  document.querySelectorAll('.ep').forEach(card => {
+    card.querySelector('button').onclick = () => run(card)
+    card.querySelector('input').onkeydown = e => { if (e.key === 'Enter') run(card) }
+  })
+  document.querySelectorAll('[data-try]').forEach(a => a.onclick = e => {
+    e.preventDefault()
+    const card = [...document.querySelectorAll('.ep')].find(c => a.dataset.try.startsWith(c.querySelector('.ep-path').textContent.split('?')[0]))
+    if (!card) return
+    card.querySelector('input').value = a.dataset.try
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    run(card)
+  })
+}).catch(e => {
+  document.getElementById('endpoints').innerHTML = `<p class="panel">Не удалось получить список методов: ${esc(e.message)}</p>`
+})
+</script>
+</body>
+</html>

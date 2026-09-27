@@ -1,46 +1,24 @@
-# Evidence Pack For Jury
+# Матрица доказательств для жюри
 
-Run this evidence pack on the final `keshaptisa` commit. It separates reproducible evidence from design claims.
+Каждое заявление в README подтверждается файлом или командой, которую можно повторить.
+Все команды — из корня репозитория после `docker compose up -d`; нужны bash, curl, Python 3.9+ (только стандартная библиотека).
 
-## Forecast contract
-
-```powershell
-python -X utf8 tools/verify_forecast_artifacts.py
-```
-
-This validates headers, duplicate keys, non-negative finite values, the 14,640-key grid, and parity between `submission_latest.csv` and rounded `forecast_hourly.csv`.
-
-## Clean startup and API smoke test
-
-```powershell
-docker compose down -v
-docker compose up -d --build
-powershell -ExecutionPolicy Bypass -File perf/smoke_test.ps1
-```
-
-The smoke test covers health, metadata, routes, stops, geometry, all horizons, stop-level forecast, external context, CSV/XLSX export, and frontend.
-
-## Performance acceptance boundary
-
-The declared single-container working SLA is the 2,500 RPS mixed scenario: 2 vCPU, 2 GB RAM, p95 102 ms, 100% HTTP success, 68% CPU, and 1.72 GB RAM. The 3,000 and 3,500 RPS rows are stress-limit measurements and intentionally show the saturation boundary; they are not claimed as zero-error operation.
-
-## External-source evidence
-
-The final submission must include one fixed ablation table with identical chronological folds for every row:
-
-```text
-source;scope;without_score;with_score;delta_pp;period;protocol
-calendar;holiday_fold;...;...;...;...;same fold and target
-weather;day_ahead;...;...;...;...;forecast archive only
-route_regimes;affected_routes;...;...;...;...;same route/date/hour grid
-traffic;peak_and_congested_subset;...;...;...;...;predeclared subset
-```
-
-Traffic must not be claimed as a global accuracy improvement if it worsens the global score. It can receive source credit only when the predeclared operational subset shows an improvement and the subset, period, and protocol are reported.
-
-## Honest limitations
-
-- `0.89234` is the official leaderboard score for run `20260926_1142`.
-- Stop-level values are allocated route forecasts, not observed stop-level labels, because `place_id` is not an actual stop identifier.
-- The year horizon is a qualitative scenario; day and month are principal horizons.
-- Traffic is available in the external-data layer and UI, but is not in the global ML blend when its ablation is negative.
+| Требование | Файл / команда | Результат |
+|---|---|---|
+| **Качество прогноза** (критерий 1) | прогон `20260926_1142`: [`notebooks_extended/baseline_colab (10).ipynb`](../mostrans_handoff/mostrans/notebooks_extended/) (код = `baseline_colab.ipynb`, с выводами) | лидерборд **0.89234**; CV по 5 фолдам 0.8921; потоковый бэктест (7 дней) 0.9141; тест на утечку — прогноз бит в бит тот же |
+| Календарь (2а) | [`ablation_external_sources.csv`](ablation_external_sources.csv), протокол B | фолд с майскими праздниками **+3.67 п.п.** (0.8146 → 0.8513); среднее по 5 фолдам +0.74 |
+| Погода (2а) | тот же файл, протокол C | прогноз на день вперёд **+0.64 п.п.** (фев–окт), тёплый сезон +1.22; осенью ≈ 0 |
+| Ремонты и режимы (2а, «прочие») | тот же файл, протокол D | лидерборд **+1.0 п.п.** (0.880 → 0.890), дата окончания ремонта — из поста Дептранса, не подбор |
+| Сбои трамваев (2а, «прочие») | тот же файл, протокол A | на затронутых часах **+6.44 п.п.** (0.7632 → 0.8276, n = 63); по всем часам +0.05 |
+| Трафик (2а) | тот же файл, протоколы A и E; [traffic-operational-test.md](traffic-operational-test.md), `python tools/traffic_operational_test.py` | **эффект не подтверждён** ни как признак прогноза (−0.08 п.п.; −0.50 на часах с баллом), ни как оперативная поправка часа (−0.01 п.п., протокол записан до запуска). В модель сабмита не входит. **Используется в сервисе**: история ЦОДД и онлайн-балл Яндекса в `external.traffic_score` со ссылками, баллы по часам — в блоке «Внешние факторы суток» как контекст, ручная поправка `kTraffic` |
+| Одинаковый протокол для всех источников | ноутбук, ячейка «Эффект внешних источников»; протокол A в CSV | 60 ежедневных отсечек сен–окт, модель переобучается «до вчера», источники выключаются по одному |
+| **Запуск с нуля** (3) | `bash perf/clean_start.sh` (`docker compose down -v && up -d --build`) → [`perf/clean-start.txt`](../perf/clean-start.txt) | **PASS**: 9 миграций на пустой БД, факт без датасета, прогон 1142, 7 внешних источников, health UP |
+| **API smoke-тест** (3, 4) | `bash perf/smoke_test.sh` → [`perf/smoke-test.txt`](../perf/smoke-test.txt) | **PASS 23/23**: все эндпоинты, поля JSON, выгрузки с данными (CSV 270 строк, XLSX, сабмит 14 640), ошибки RFC 9457, фронтенд и прокси |
+| **Сверка ML ↔ сервис** (1, 3) | `python tools/verify_artifacts.py` → [`perf/verify-artifacts.txt`](../perf/verify-artifacts.txt) | **PASS**: 14 640 ключей; в БД max \|Δ\| = 0 (порог 1e-9); выгрузка = half-up(pred), **0 расхождений** с сабмитом на платформе |
+| **Нагрузочный тест** (3) | `bash perf/official_acceptance.sh 3000` → [`perf/official-acceptance.txt`](../perf/official-acceptance.txt) | **3 000 RPS, 60 с: 180 000 запросов, все 200, 0 таймаутов, p95 2.0 мс, p99 18 мс, CPU 67% от 2 vCPU, RAM 1.70 ГБ стабильна, swap запрещён**; 2 500 RPS — p95 1.4 мс, CPU 50% ([отчёт](../perf/official-acceptance-2500.txt)) |
+| Предел одного контейнера (3) | `bash perf/run_mixed.sh` → [`perf/mixed-steps.txt`](../perf/mixed-steps.txt) | **≥ 3 500 RPS — режим перегрузки, не рабочий SLA**: CPU 100%, таймауты. На 3 000 в ступенчатом прогоне p95 36 мс, CPU 76% — в требованиях ТЗ ([perf/README.md](../perf/README.md)) |
+| **Сборка фронтенда** (3, 4) | `cd frontend && npm ci && npm run build` → [`perf/frontend-build.txt`](../perf/frontend-build.txt) | **PASS**: `tsc -b` (проверка типов) + `vite build`, exit code 0 |
+| Юнит-тесты бэкенда (3) | `cd backend && gradle test` (или в контейнере `gradle:8.14.3-jdk21`) | 24 теста, 0 падений: агрегация час → день → месяц, коэффициенты, горизонты, RFC 9457, выгрузка и округление, «обычный уровень» |
+| Архитектура (3) | [architecture.md](architecture.md) | схема модулей, путь запроса, развёртывание, хранилище |
+| Область определения (2б) | [model-applicability.md](model-applicability.md) | где валидна, пределы, зависимость от внешних данных, перенос, мониторинг |
+| Веса модели (артефакт 1) | [`ml/artifacts/`](../ml/artifacts/) | 9 × LightGBM прогона 1142, признаки совпадают с `ml_contract.json`, загружаются `lgb.Booster` |

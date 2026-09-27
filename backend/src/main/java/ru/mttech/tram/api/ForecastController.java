@@ -192,8 +192,8 @@ public class ForecastController {
     }
 
     /** Разрешение горизонта в конкретный интервал и детализацию. */
-    record Window(LocalDate from, LocalDate to, Granularity granularity) {
-        static Window resolve(String horizon, LocalDate date, LocalDate from, LocalDate to,
+    public record Window(LocalDate from, LocalDate to, Granularity granularity) {
+        public static Window resolve(String horizon, LocalDate date, LocalDate from, LocalDate to,
                               Granularity g, ForecastQueryService q) {
             if (from != null && to != null) return new Window(from, to, g == null ? Granularity.day : g);
             LocalDate d = date != null ? date : (LocalDate) q.meta().get("defaultDate");

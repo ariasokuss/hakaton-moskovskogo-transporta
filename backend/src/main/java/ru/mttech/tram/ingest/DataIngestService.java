@@ -108,6 +108,13 @@ public class DataIngestService {
         log.info("Загружено строк факта: {}, отброшено (маршрут вне справочника): {}", rows.size(), skipped);
     }
 
+    /**
+     * Конец истории по ТЗ: labels организаторов заканчиваются 31.10.2025, дальше — прогнозный период.
+     * В сырых валидациях есть ночные поездки 01.11 (часы 0–1, последние рейсы 31.10 после полуночи) —
+     * они в прогнозное окно не попадают, иначе сервис показывал бы «факт» внутри прогноза.
+     */
+    static final LocalDate HISTORY_END = LocalDate.of(2025, 10, 31);
+
     /** Факт и нагрузка из агрегата сырых валидаций (route;date;hour;boardings;load) — когда labels/ не смонтирован. */
     void ingestActualsFromLoad(Set<Integer> routes) {
         Path p = Path.of(props.loadFile());
@@ -120,6 +127,7 @@ public class DataIngestService {
             int route = Integer.parseInt(c[0]);
             if (!routes.contains(route)) continue;
             LocalDate date = LocalDate.parse(c[1]);
+            if (date.isAfter(HISTORY_END)) continue;
             rows.add("(" + route + ",'" + date + "'," + Integer.parseInt(c[2]) + "," + Integer.parseInt(c[3])
                     + "," + Integer.parseInt(c[4]) + ")");
         }

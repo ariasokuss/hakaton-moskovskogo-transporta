@@ -74,6 +74,9 @@ services:
       timeout: 3s
       retries: 12
       start_period: 40s
+    # Swap запрещён (ТЗ: «RAM стабильна без swap»): memswap = лимиту RAM. По умолчанию Docker
+    # разрешает ещё столько же swap — под нагрузкой это латентность в секундах вместо честного OOM.
+    memswap_limit: 2G
     deploy:
       resources:
         limits:
