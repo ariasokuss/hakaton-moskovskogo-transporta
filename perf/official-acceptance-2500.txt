@@ -1,35 +1,35 @@
 ПРИЁМОЧНЫЙ НАГРУЗОЧНЫЙ ТЕСТ — «Пантограф», бэкенд
-Дата (UTC):      2026-09-26T18:27:05Z
-Коммит:          961fd2f353e885fe83730ed9bde8f6f8d9f90afa (+ незакоммиченные изменения)
-Образ backend:   sha256:97d64203cfdcce45ad3ea8d741789da30c5381a477216b5e8079dee465fe5b7d
+Дата (UTC):      2026-09-27T20:13:54Z
+Коммит:          f9d48e21ed863cacb6d5f53cac1ce7fb5ce86772
+Образ backend:   sha256:0015e4bbc94ca067a187b5eb949f4450a3078f625483d3ca7f4f2041449d4881
 Образ postgres:  sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
 Лимиты backend:  2 vCPU / 2 ГБ RAM, swap запрещён (memswap = RAM)
-Прогон модели:   "shortTermRun":"ml-20260926_1142"
+Прогон модели:   "shortTermRun":"ml-20260927_1334_g103"
 Нагрузка:        2500 RPS фиксированной частоты, 60 с (открытая модель: частота не снижается, если сервис тормозит);
                  клиент vegeta в той же docker-сети, от 64 соединений
 Сценарий:        perf/targets-mixed.txt — 3000 запросов, 2199 уникальных URL: 45% /api/dashboard, 25% /api/forecast
                  (день/месяц/год), 15% /api/forecast?stop=, 10% /api/attention, 5% /api/export?format=csv
-Команда:         docker run --rm --network moscow_transport_default -v $PWD/perf:/perf peterevans/vegeta sh -c "vegeta attack -targets=/perf/targets-mixed.txt -rate=2500 -duration=60s -timeout=5s -workers=64 | vegeta report"
+Команда:         docker run --rm --network mtall_default -v $PWD/perf:/perf peterevans/vegeta sh -c "vegeta attack -targets=/perf/targets-mixed.txt -rate=2500 -duration=60s -timeout=5s -workers=64 | vegeta report"
 Стенд:           Docker Desktop (WSL2) на ноутбуке, клиент нагрузки делит машину с сервисом
 
 == Результат vegeta
-Requests      [total, rate, throughput]         150000, 2500.05, 2500.02
-Duration      [total, attack, wait]             1m0s, 59.999s, 673.409µs
-Latencies     [min, mean, 50, 90, 95, 99, max]  194.936µs, 838.806µs, 578.665µs, 1.18ms, 1.432ms, 2.712ms, 99.859ms
-Bytes In      [total, mean]                     2149365300, 14329.10
+Requests      [total, rate, throughput]         149895, 2497.76, 2496.47
+Duration      [total, attack, wait]             1m0s, 1m0s, 30.963ms
+Latencies     [min, mean, 50, 90, 95, 99, max]  190.775µs, 626.216µs, 475.17µs, 987.251µs, 1.172ms, 1.66ms, 90.545ms
+Bytes In      [total, mean]                     2147851210, 14329.04
 Bytes Out     [total, mean]                     0, 0.00
 Success       [ratio]                           100.00%
-Status Codes  [code:count]                      200:150000  
+Status Codes  [code:count]                      200:149895  
 Error Set:
 == Сводка
-HTTP-коды:       {"200":150000}   (код 0 — запрос не завершён: таймаут 5 с или обрыв)
+HTTP-коды:       {"200":149895}   (код 0 — запрос не завершён: таймаут 5 с или обрыв)
 Не завершено:    0 (таймауты и обрывы)
 Ошибки:          
-CPU backend:     среднее 100% (50% от 2 vCPU), пик 139%, замеров 29 (docker stats, 100% = одно ядро)
-RAM backend:     до теста 1.616GiB / 2GiB → после теста 1.697GiB / 2GiB
+CPU backend:     среднее 95% (48% от 2 vCPU), пик 121%, замеров 29 (docker stats, 100% = одно ядро)
+RAM backend:     до теста 1.592GiB / 2GiB → после теста 1.702GiB / 2GiB
 
 == docker compose ps
 NAME            STATUS
-tram-backend    Up 10 minutes (healthy)
-tram-frontend   Up 9 minutes
-tram-postgres   Up 29 minutes (healthy)
+tram-backend    Up 2 minutes (healthy)
+tram-frontend   Up 2 minutes
+tram-postgres   Up 2 minutes (healthy)

@@ -1,24 +1,14 @@
-Дата: 2026-09-26T18:36:02Z
-warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'backend/src/main/java/ru/mttech/tram/ingest/DataIngestService.java', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'backend/src/main/java/ru/mttech/tram/ingest/ExternalDataService.java', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'docker-compose.yml', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'docs/criteria-checklist.md', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'frontend/src/api.ts', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'frontend/src/components/DayContext.tsx', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'frontend/src/styles.css', LF will be replaced by CRLF the next time Git touches it
-Коммит: 961fd2f353e885fe83730ed9bde8f6f8d9f90afa (+ незакоммиченные изменения)
+Дата: 2026-09-27T20:09:48Z
+Коммит: f9d48e21ed863cacb6d5f53cac1ce7fb5ce86772
 Команды: docker compose down -v && docker compose up -d --build
 
- Network moscow_transport_default Removing 
- Volume moscow_transport_pgdata Removed 
- Network moscow_transport_default Removed 
- Image moscow_transport-backend Built 
- Image moscow_transport-frontend Built 
- Volume moscow_transport_pgdata Created 
- Volume moscow_transport_pgdata Created 
- Network moscow_transport_default Created 
- Network moscow_transport_default Created 
+ Network mtall_default Removing 
+ Volume mtall_pgdata Removed 
+ Network mtall_default Removed 
+ Image mtall-backend Built 
+ Image mtall-frontend Built 
+ Network mtall_default Created 
+ Volume mtall_pgdata Created 
  Container tram-postgres Created 
  Container tram-backend Created 
  Container tram-frontend Created 
@@ -28,28 +18,28 @@ warning: in the working copy of 'frontend/src/styles.css', LF will be replaced b
  Container tram-backend Healthy 
  Container tram-frontend Started 
 
-Готов за 25 с (сборка образов — из кэша Docker, если он есть; миграции; загрузка данных)
+Готов за 98 с (сборка образов — из кэша Docker, если он есть; миграции; загрузка данных)
 
 == docker compose ps
-NAME            IMAGE                       STATUS
-tram-backend    moscow_transport-backend    Up 16 seconds (healthy)
-tram-frontend   moscow_transport-frontend   Up Less than a second
-tram-postgres   postgres:17-alpine          Up 21 seconds (healthy)
+NAME            IMAGE                STATUS
+tram-backend    mtall-backend        Up 22 seconds (healthy)
+tram-frontend   mtall-frontend       Up 1 second
+tram-postgres   postgres:17-alpine   Up 27 seconds (healthy)
 
 == миграции и загрузка (лог бэкенда)
-o.f.core.internal.command.DbMigrate      : Successfully applied 9 migrations to schema "core", now at version v9 (execution time 00:00.074s)
+o.f.core.internal.command.DbMigrate      : Successfully applied 11 migrations to schema "core", now at version v11 (execution time 00:00.062s)
 r.mttech.tram.ingest.DataIngestService   : Датасета нет — факт загружен из load_hourly.csv: 57567 строк
-r.mttech.tram.ingest.DataIngestService   : Импортирован прогноз ml-20260926_1142: 13176 строк, 2025-11-01..2025-12-31 (файл forecast_hourly.csv)
+r.mttech.tram.ingest.DataIngestService   : Импортирован прогноз ml-20260927_1334_g103: 13176 строк, 2025-11-01..2025-12-31 (файл forecast_hourly.csv)
 r.m.tram.ingest.ExternalDataService      : Внешний источник xmlcalendar: загружено 365 строк
 r.m.tram.ingest.ExternalDataService      : Внешний источник open-meteo-forecast: загружено 8760 строк
 r.m.tram.ingest.ExternalDataService      : Внешний источник open-meteo-fact: загружено 8760 строк
 r.m.tram.ingest.ExternalDataService      : Внешний источник telegram-dtroad: загружено 172 строк
+r.m.tram.forecast.ForecastRunService     : Годовой прогон 2 готов: 78840 строк
 r.m.tram.ingest.ExternalDataService      : Внешний источник telegram-dtoperativno: загружено 255 строк
 r.m.tram.ingest.ExternalDataService      : Внешний источник telegram-incidents: загружено 113 строк
 r.m.tram.ingest.ExternalDataService      : Внешний источник codd-telegram: загружено 357 строк
-r.m.tram.forecast.ForecastRunService     : Годовой прогон 2 готов: 78840 строк
 
 == GET /actuator/health
-{"components":{"diskSpace":{"details":{"total":1081101176832,"free":1013339066368,"threshold":10485760,"path":"/app/.","exists":true},"status":"UP"},"forecastData":{"details":{"routes":9,"actualDays":304,"shortTermRun":"ml-20260926_1142","yearRun":"seasonal-profile-year-v1+ml-monthly@20260926_1142"},"status":"UP"},"livenessState":{"status":"UP"},"ping":{"status":"UP"},"r2dbc":{"details":{"database":"PostgreSQL","validationQuery":"validate(REMOTE)"},"status":"UP"},"readinessState":{"status":"UP"},"ssl":{"details":{"expiringChains":[],"invalidChains":[],"validChains":[]},"status":"UP"}},"groups":["liveness","readiness"],"status":"UP"}
+{"components":{"diskSpace":{"details":{"total":1081101176832,"free":1013247049728,"threshold":10485760,"path":"/app/.","exists":true},"status":"UP"},"forecastData":{"details":{"routes":9,"actualDays":304,"shortTermRun":"ml-20260927_1334_g103","yearRun":"seasonal-profile-year-v1+ml-monthly@20260927_1334_g103"},"status":"UP"},"livenessState":{"status":"UP"},"ping":{"status":"UP"},"r2dbc":{"details":{"database":"PostgreSQL","validationQuery":"validate(REMOTE)"},"status":"UP"},"readinessState":{"status":"UP"},"ssl":{"details":{"expiringChains":[],"invalidChains":[],"validChains":[]},"status":"UP"}},"groups":["liveness","readiness"],"status":"UP"}
 
 PASS
