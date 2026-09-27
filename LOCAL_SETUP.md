@@ -12,8 +12,8 @@
 ## 1. Сервис в Docker
 
 ```bash
-git clone https://github.com/shotmee/moscow_transport.git
-cd moscow_transport
+git clone https://github.com/ariasokuss/hakaton-moskovskogo-transporta.git
+cd hakaton-moskovskogo-transporta
 docker compose up -d --build
 ```
 
