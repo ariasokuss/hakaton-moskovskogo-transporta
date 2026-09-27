@@ -12,7 +12,7 @@
 | Пайплайн приёма сырых валидаций (DuckDB, сверка с labels) | [`pipeline/ingest_raw.py`](../mostrans_handoff/mostrans/pipeline/ingest_raw.py) |
 | Внешние данные и скрипты их получения | [`external_data/`](../mostrans_handoff/mostrans/external_data/), описание — [`EXTERNAL_DATA.md`](../mostrans_handoff/mostrans/EXTERNAL_DATA.md) |
 | Артефакты прогноза для сервиса | [`data/forecast/`](../data/forecast/): `forecast_hourly.csv`, `forecast_year_monthly.csv`, `coefficients.json`, `ml_contract.json` |
-| Веса моделей LightGBM (9 шт.: горизонты 3/14/28 × seed 42/43/44) | [`artifacts/`](artifacts/) — `lgbm_h{3,14,28}_s{42,43,44}.txt` прогона `20260926_1142` (по 500 деревьев, L1, 16 признаков по `ml_contract.json`); папка — копия `MyDrive/mostrans/submissions/artifacts/` целиком, прогнозы в ней идентичны `data/forecast/` |
+| Веса моделей LightGBM (9 шт.: горизонты 3/14/28 × seed 42/43/44) | [`artifacts/`](artifacts/) — `lgbm_h{3,14,28}_s{42,43,44}.txt` прогона `20260927_1334` (по 500 деревьев, L1, 16 признаков по `ml_contract.json`); папка — копия `MyDrive/mostrans/submissions/artifacts/` целиком, прогнозы в ней идентичны `data/forecast/` |
 | Сабмиты | [`submissions/`](../mostrans_handoff/mostrans/submissions/), [`data/forecast/`](../data/forecast/) |
 
 Загрузить модели вне ноутбука:
