@@ -29,6 +29,8 @@ def load_models(art=ART):
 
 
 def main():
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")   # консоль Windows (cp1251)
     contract, models = load_models()
     ok = True
     print(f"версия модели: {contract['model_version']} | моделей: {len(models)} | признаков: {len(contract['features'])}")

@@ -1,4 +1,8 @@
-"""Собирает baseline_colab.ipynb из списка ячеек. Запуск с --run выполняет код локально (проверка)."""
+"""Исходник финального ноутбука ml/pantograph_best_colab.ipynb: собирает его из списка ячеек.
+
+    python ml/tools/build_nb_best.py ml/pantograph_best_colab.ipynb          # сборка
+    LOCAL_DATA_DIR=ml python ml/tools/build_nb_best.py out.ipynb --run       # сборка и локальный прогон
+"""
 import os
 import sys
 import nbformat as nbf
@@ -61,7 +65,7 @@ KAGGLE_FULL_DOWNLOAD = False                           #@param {type:"boolean"}
 DRIVE_DATA_DIR = "/content/drive/MyDrive/mostrans"     #@param {type:"string"}
 # если на Drive нет external_data — ноутбук найдёт её в другой папке Drive или скачает из репозитория проекта
 EXT_REPO_URL = "https://github.com/shotmee/moscow_transport.git"   #@param {type:"string"}
-EXT_REPO_BRANCH = "keshaptisa"                                       #@param {type:"string"}
+EXT_REPO_BRANCH = "main"                                             #@param {type:"string"}
 
 SEED = 42
 TECH_HOURS = (2, 3)   # технические валидации (проверка валидаторов, 0.002% объёма) — не используются в профиле, прогноз 0
@@ -1151,6 +1155,8 @@ code(r"""
 CUTOFF = "2025-10-31"
 dates = pd.date_range(FORECAST_START, FORECAST_END)
 pred, pm = full_forecast(df, CUTOFF, dates, cache=ORIGIN_CACHE)
+pred["pred"] = pred.pred * SEASON_GROWTH                   # сезонная поправка уровня — до годового сценария и артефактов
+pred.loc[pred.route == 5, "pred"] = 0.0                    # маршрут 5 — нули (указание организаторов)
 print(f"BEST={BEST} K_holiday={pm.K_holiday:.3f} K_short={pm.K_short:.3f} beta={np.round(pm.beta, 4)} BLEND_W={BLEND_W}")
 print(f"маршрут 5: {'включён (аналог — маршрут ' + str(ROUTE5_ANALOG_ROUTE) + ')' if ROUTE5_ENABLED else 'выключен (0)'}")
 print("Прогноз, тыс. посадок по месяцам и маршрутам:")
@@ -1211,10 +1217,8 @@ def to_submission(pred):
     assert set(sub.route) == set(ROUTES) and sub.date.min() == FORECAST_START and sub.date.max() == FORECAST_END
     return sub
 
-pred["pred"] = pred.pred * SEASON_GROWTH                   # сезонный рост уровня
-pred.loc[pred.route == 5, "pred"] = 0.0                    # маршрут 5 — нули (указание организаторов)
 sub = to_submission(pred)
-stamp = time.strftime("%Y%m%d_%H%M")
+stamp = time.strftime("%Y%m%d_%H%M") + (f"_g{round(SEASON_GROWTH * 100)}" if SEASON_GROWTH != 1.0 else "")   # версия модели
 cv_score = cv.loc["mean", "по горизонту"]
 fname = OUT_DIR / f"submission_ml_{stamp}.csv"
 sub.to_csv(fname, sep=";", index=False, encoding="utf-8")

@@ -12,7 +12,7 @@
 ## 1. Сервис в Docker
 
 ```bash
-git clone -b keshaptisa https://github.com/shotmee/moscow_transport.git
+git clone https://github.com/shotmee/moscow_transport.git
 cd moscow_transport
 docker compose up -d --build
 ```
@@ -66,7 +66,7 @@ python ml/load_models.py                 # проверка весов фина�
 ### Запуск ноутбука
 
 Переменная `LOCAL_DATA_DIR` включает локальный режим: датасет — `ml/dataset.zip`, внешние данные — `ml/external_data/`,
-результаты — `ml/submissions/`.
+результаты — `ml/submissions/` (каталоги `ml/submissions/` и `ml/checkpoints/` создаются при первом запуске).
 
 ```bash
 # интерактивно

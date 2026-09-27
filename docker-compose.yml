@@ -16,7 +16,7 @@ services:
       # Ускоряет первичную загрузку labels; данные не критичны к потере.
       POSTGRES_INITDB_ARGS: "--data-checksums"
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"   # только локально: БД не публикуется наружу
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

@@ -50,7 +50,7 @@ flowchart LR
 |---|---|---|
 | Приём и нормализация | `ml/pipeline/ingest_raw.py` (сырые 62 млн событий → `route × date × hour`), `tools/build_load.sh`, `backend/.../ingest/` | `labels/*.csv`, `data/load/load_hourly.csv`: `route;date;hour;boardings;load` |
 | Признаки и геопривязка | ноутбук ML (календарь, погода, режимы, сбои), `backend/.../features/GeometryService` (трассы и остановки OSM, доли остановок) | `data/geo/routes_osm.json`, схема `external.*` |
-| ML-прогноз и агрегация | ноутбук `baseline_colab.ipynb` → артефакты; `backend/.../forecast/` агрегирует час → день → месяц → год | `data/forecast/forecast_hourly.csv`: `route;date;hour;pred;model_version` + `ml_contract.json` |
+| ML-прогноз и агрегация | ноутбук `ml/pantograph_best_colab.ipynb` → артефакты; `backend/.../forecast/` агрегирует час → день → месяц → год | `data/forecast/forecast_hourly.csv`: `route;date;hour;pred;model_version` + `ml_contract.json` |
 | API | `backend/.../api/`, `backend/.../export/` | REST, JSON, RFC 9457 ([README §9](../README.md#9-api)) |
 | Frontend | `frontend/` | те же query-параметры, что в API: состояние экрана = ссылка |
 
