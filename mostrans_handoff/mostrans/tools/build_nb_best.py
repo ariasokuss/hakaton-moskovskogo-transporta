@@ -440,7 +440,7 @@ code(r"""
 class ProfileModel:
     def __init__(self, n_weeks=6, agg="median", exclude_summer=True, use_weather=True, use_calendar=True, level_weeks=None,
                  drop_anomalies=False, use_regimes=True, use_traffic=None, use_incidents=True,
-                 recent_weeks=4, recent_w=0.3):
+                 recent_weeks=4, recent_w=0.3, shape8_w=0.0, growth_damp=0.0, growth_scope="route"):
         self.n_weeks, self.agg, self.exclude_summer = n_weeks, agg, exclude_summer
         self.level_weeks = level_weeks or n_weeks        # None → уровень и форма по одному окну (старый профиль)
         self.use_weather, self.use_calendar = use_weather, use_calendar
@@ -449,6 +449,8 @@ class ProfileModel:
         self.use_traffic = TRAFFIC_IN_MODEL if use_traffic is None else use_traffic
         self.use_incidents = use_incidents
         self.recent_weeks, self.recent_w = recent_weeks, recent_w   # доля «свежей» формы суток (последние недели)
+        self.shape8_w = shape8_w                           # гипотеза 1: доля формы суток по окну 8 недель (ансамбль окон)
+        self.growth_damp, self.growth_scope = growth_damp, growth_scope   # гипотеза 2: рост уровня по тренду будних дней
 
     def _clean_days(self, cutoff):
         c = CAL.loc[:cutoff]
@@ -478,8 +480,25 @@ class ProfileModel:
             sr = tr[tr.date.isin(days[-self.recent_weeks * 7:])].groupby(["route", "ptype", "hour"]).boardings.agg(self.agg)
             sr = sr / sr.groupby(level=["route", "ptype"]).transform("sum")
             shape = ((1 - self.recent_w) * shape + self.recent_w * sr.reindex(shape.index).fillna(shape)).fillna(0)
+        if self.shape8_w > 0:
+            s8 = tr[tr.date.isin(days[-8 * 7:])].groupby(["route", "ptype", "hour"]).boardings.agg(self.agg)
+            s8 = s8 / s8.groupby(level=["route", "ptype"]).transform("sum")
+            shape = ((1 - self.shape8_w) * shape + self.shape8_w * s8.reindex(shape.index).fillna(shape)).fillna(0)
         level = (tr[tr.date.isin(lvl_days)].groupby(["route", "ptype", "date"]).boardings.sum()
                    .groupby(level=["route", "ptype"]).agg(self.agg))
+        if self.growth_damp > 0:
+            # рост уровня по данным: будни последних 4 чистых недель к 4 предыдущим, с затуханием, в пределах ±5%
+            wd = tr[tr.date.isin(all_days) & (tr.date.dt.dayofweek < 5)].groupby(["route", "date"]).boardings.sum().unstack(0)
+            wd = wd.tail(40)
+            if len(wd) >= 30:
+                rec, prev = wd.tail(20).mean(), wd.iloc[-40:-20].mean()
+                if self.growth_scope == "global":
+                    g = pd.Series(rec.sum() / max(prev.sum(), 1), index=rec.index)
+                else:
+                    g = (rec / prev.replace(0, np.nan)).fillna(1.0)
+                g = (1 + self.growth_damp * (g - 1)).clip(0.95, 1.05)
+                self.growth = g
+                level = level * g.reindex(level.index.get_level_values("route")).fillna(1.0).values
         self.S = (shape * level.reindex(shape.index.droplevel("hour")).values).fillna(0)
         self.level = level
         self.regimes = [self._normal_profile(data, rg) for rg in known_regimes(cutoff)] if self.use_regimes else []
@@ -712,6 +731,41 @@ print(grid_res.head(10).round(4).to_string(index=False))
 BEST = grid_res.iloc[0][["n_weeks", "level_weeks", "agg", "exclude_summer", "drop_anomalies"]].to_dict()
 BEST["n_weeks"] = int(BEST["n_weeks"]); BEST["level_weeks"] = int(BEST["level_weeks"]); BEST["exclude_summer"] = bool(BEST["exclude_summer"]); BEST["drop_anomalies"] = bool(BEST["drop_anomalies"])
 print("BEST:", BEST)
+""")
+
+code(r"""
+#@title 🧪 Проверка гипотез на валидации (только прошлые данные, выбор по CV)
+# H1 — ансамбль окон формы суток (добавить окно 8 недель); H2 — рост уровня по тренду будних дней (по маршрутам или общий).
+# Гипотеза включается в финальную модель, только если улучшает средний WAPE-score фолдов.
+HYP = {"база (BEST)": {},
+       "H1 форма: +окно 8 нед (0.2)": dict(shape8_w=0.2),
+       "H1 форма: +окно 8 нед (0.35)": dict(shape8_w=0.35),
+       "H2 рост уровня по маршрутам (×0.5)": dict(growth_damp=0.5, growth_scope="route"),
+       "H2 рост уровня по маршрутам (×1.0)": dict(growth_damp=1.0, growth_scope="route"),
+       "H2 рост уровня общий (×0.5)": dict(growth_damp=0.5, growth_scope="global"),
+       "H2 рост уровня общий (×1.0)": dict(growth_damp=1.0, growth_scope="global")}
+hyp_rows = []
+for name, kw in tqdm(HYP.items(), desc="гипотезы"):
+    r = evaluate(lambda: ProfileModel(**{**BEST, **kw}, use_weather=False))
+    hyp_rows.append({"гипотеза": name, **{k: v for k, v in r.items()}})
+    print(f"{name:<38} mean={r['mean']:.4f}")
+HYP_RES = pd.DataFrame(hyp_rows).set_index("гипотеза")
+HYP_RES["Δ, п.п."] = 100 * (HYP_RES["mean"] - HYP_RES.loc["база (BEST)", "mean"])
+print(HYP_RES.round(4).to_string())
+# лучшая гипотеза из каждой группы, если даёт прирост; затем проверка их сочетания
+chosen = {}
+for grp in ("H1", "H2"):
+    g = HYP_RES[HYP_RES.index.str.startswith(grp)]
+    if len(g) and g["Δ, п.п."].max() > 0.01:
+        chosen.update(HYP[g["Δ, п.п."].idxmax()])
+if chosen:
+    r = evaluate(lambda: ProfileModel(**{**BEST, **chosen}, use_weather=False))
+    print(f"\nсочетание {chosen}: mean={r['mean']:.4f} (база {HYP_RES.loc['база (BEST)', 'mean']:.4f})")
+    if r["mean"] > HYP_RES.loc["база (BEST)", "mean"]:
+        BEST = {**BEST, **chosen}
+        if chosen.get("growth_damp", 0) > 0:
+            SEASON_GROWTH = 1.0            # рост уровня теперь оценивается по данным — постоянный множитель не нужен
+print("\nИтоговая конфигурация профиля:", BEST, "| SEASON_GROWTH =", SEASON_GROWTH)
 """)
 
 code(r"""
